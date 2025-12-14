@@ -5,3 +5,4 @@ mistral-common
 protobuf
 docling
 chardet
+sentence-transformers

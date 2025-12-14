@@ -105,131 +105,131 @@ def main():
         if 'context_sources' in result4:
             print(f"\nSources used:")
             for src in result4['context_sources']:
-                print(f"  - {src['filename']} (page {src['page']}, similarity: {src['similarity']:.3f})")
+                print(f"  - {src['filename']} (similarity: {src['similarity']:.3f}, chars: {src['chars']})")
         print()
         
-    #     # Example 5: Document loading from base64
-    #     print("=" * 60)
-    #     print("EXAMPLE 5: Document loading from base64")
-    #     print("=" * 60)
+        # Example 5: Document loading from base64
+        print("=" * 60)
+        print("EXAMPLE 5: Document loading from base64")
+        print("=" * 60)
         
-    #     try:
-    #         print(f"Converting {document_file} to base64...")
-    #         with open(document_file, "rb") as f:
-    #             file_bytes = f.read()
-    #             base64_data = base64.b64encode(file_bytes).decode('utf-8')
+        try:
+            print(f"Converting {document_file} to base64...")
+            with open(document_file, "rb") as f:
+                file_bytes = f.read()
+                base64_data = base64.b64encode(file_bytes).decode('utf-8')
             
-    #         print("Loading document from base64...")
-    #         runner_with_session.load_document_from_base64(
-    #             base64_data=base64_data,
-    #             filename=document_file
-    #         )
+            print("Loading document from base64...")
+            runner_with_session.load_document_from_base64(
+                base64_data=base64_data,
+                filename=document_file
+            )
             
-    #         print(f"Vector store now has {runner_with_session.vector_store.count()} chunks")
-    #         print()
+            print(f"Vector store now has {runner_with_session.vector_store.count()} chunks")
+            print()
             
-    #         # Ask another question
-    #         question2 = "Summarize the key points from this document."
-    #         print(f"Question: {question2}")
-    #         result5 = runner_with_session.generate(
-    #             prompt=question2,
-    #             use_context=True,
-    #             max_context_docs=5
-    #         )
+            # Ask another question
+            question2 = "Summarize the key points from this document."
+            print(f"Question: {question2}")
+            result5 = runner_with_session.generate(
+                prompt=question2,
+                use_context=True,
+                max_context_docs=5
+            )
             
-    #         print(f"Response: {result5['text']}")
-    #         if 'context_sources' in result5:
-    #             print(f"\nRetrieved {len(result5['context_sources'])} relevant chunks")
-    #         print()
-    #     except Exception as e:
-    #         print(f"Error loading from base64: {e}")
-    #         print()
+            print(f"Response: {result5['text']}")
+            if 'context_sources' in result5:
+                print(f"\nRetrieved {len(result5['context_sources'])} relevant chunks")
+            print()
+        except Exception as e:
+            print(f"Error loading from base64: {e}")
+            print()
         
-    #     # Example 6: Document loading from data URI
-    #     print("=" * 60)
-    #     print("EXAMPLE 6: Document loading from data URI")
-    #     print("=" * 60)
+        # Example 6: Document loading from data URI
+        print("=" * 60)
+        print("EXAMPLE 6: Document loading from data URI")
+        print("=" * 60)
         
-    #     try:
-    #         print(f"Converting {document_file} to data URI...")
-    #         with open(document_file, "rb") as f:
-    #             file_bytes = f.read()
-    #             base64_encoded = base64.b64encode(file_bytes).decode('utf-8')
-    #             data_uri = f"data:application/octet-stream;base64,{base64_encoded}"
+        try:
+            print(f"Converting {document_file} to data URI...")
+            with open(document_file, "rb") as f:
+                file_bytes = f.read()
+                base64_encoded = base64.b64encode(file_bytes).decode('utf-8')
+                data_uri = f"data:application/octet-stream;base64,{base64_encoded}"
             
-    #         print("Loading document from data URI...")
-    #         runner_with_session.load_document_from_base64(
-    #             base64_data=data_uri,
-    #             filename=document_file
-    #         )
+            print("Loading document from data URI...")
+            runner_with_session.load_document_from_base64(
+                base64_data=data_uri,
+                filename=document_file
+            )
             
-    #         print(f"Vector store now has {runner_with_session.vector_store.count()} chunks")
-    #         print()
-    #     except Exception as e:
-    #         print(f"Error loading from data URI: {e}")
-    #         print()
+            print(f"Vector store now has {runner_with_session.vector_store.count()} chunks")
+            print()
+        except Exception as e:
+            print(f"Error loading from data URI: {e}")
+            print()
         
-    #     # Example 7: Document loading from stream (simulated)
-    #     print("=" * 60)
-    #     print("EXAMPLE 7: Document loading from stream (simulated)")
-    #     print("=" * 60)
+        # Example 7: Document loading from stream (simulated)
+        print("=" * 60)
+        print("EXAMPLE 7: Document loading from stream (simulated)")
+        print("=" * 60)
         
-    #     try:
-    #         print(f"Simulating stream upload for {document_file}...")
+        try:
+            print(f"Simulating stream upload for {document_file}...")
             
-    #         import io
-    #         with open(document_file, "rb") as f:
-    #             file_bytes = f.read()
-    #             file_stream = io.BytesIO(file_bytes)
+            import io
+            with open(document_file, "rb") as f:
+                file_bytes = f.read()
+                file_stream = io.BytesIO(file_bytes)
             
-    #         print("Loading document from stream...")
-    #         runner_with_session.load_document_from_stream(
-    #             file_stream=file_stream,
-    #             filename=document_file,
-    #             mime_type="application/pdf"
-    #         )
+            print("Loading document from stream...")
+            runner_with_session.load_document_from_stream(
+                file_stream=file_stream,
+                filename=document_file,
+                mime_type="application/pdf"
+            )
             
-    #         print(f"Vector store now has {runner_with_session.vector_store.count()} chunks")
-    #         print()
+            print(f"Vector store now has {runner_with_session.vector_store.count()} chunks")
+            print()
             
-    #         # Query the document
-    #         question3 = "What are the main topics covered?"
-    #         print(f"Question: {question3}")
-    #         result6 = runner_with_session.generate(
-    #             prompt=question3,
-    #             use_context=True
-    #         )
+            # Query the document
+            question3 = "What are the main topics covered?"
+            print(f"Question: {question3}")
+            result6 = runner_with_session.generate(
+                prompt=question3,
+                use_context=True
+            )
             
-    #         print(f"Response: {result6['text']}")
-    #         if 'context_sources' in result6:
-    #             print(f"\nTop relevant chunks:")
-    #             for src in result6['context_sources'][:3]:
-    #                 print(f"  - {src['filename']} (page {src.get('page', '?')}, similarity: {src['similarity']:.3f})")
-    #         print()
-    #     except Exception as e:
-    #         print(f"Error loading from stream: {e}")
-    #         print()
+            print(f"Response: {result6['text']}")
+            if 'context_sources' in result6:
+                print(f"\nTop relevant chunks:")
+                for src in result6['context_sources'][:3]:
+                    print(f"  - {src['filename']} (page {src.get('page', '?')}, similarity: {src['similarity']:.3f})")
+            print()
+        except Exception as e:
+            print(f"Error loading from stream: {e}")
+            print()
         
-    #     # Show vector store statistics
-    #     print("=" * 60)
-    #     print("VECTOR STORE STATISTICS")
-    #     print("=" * 60)
-    #     stats = runner_with_session.vector_store.get_stats()
-    #     print(f"Total chunks: {stats['total_entries']}")
-    #     print(f"Embedding dimension: {stats['dimension']}")
-    #     print(f"Memory usage: {stats['memory_mb']:.2f} MB")
-    #     print()
+        # Show vector store statistics
+        print("=" * 60)
+        print("VECTOR STORE STATISTICS")
+        print("=" * 60)
+        stats = runner_with_session.vector_store.get_stats()
+        print(f"Total chunks: {stats['total_entries']}")
+        print(f"Embedding dimension: {stats['dimension']}")
+        print(f"Memory usage: {stats['memory_mb']:.2f} MB")
+        print()
         
-    # else:
-    #     print()
-    #     print("=" * 60)
-    #     print("INFO: No document file provided")
-    #     print("=" * 60)
-    #     print("To test RAG with document loading, run:")
-    #     print("  python sample.py file.docx")
-    #     print("  python sample.py README.md")
-    #     print("  python sample.py document.pdf")
-    #     print()
+    else:
+        print()
+        print("=" * 60)
+        print("INFO: No document file provided")
+        print("=" * 60)
+        print("To test RAG with document loading, run:")
+        print("  python sample.py file.docx")
+        print("  python sample.py README.md")
+        print("  python sample.py document.pdf")
+        print()
 
 
 if __name__ == "__main__":
