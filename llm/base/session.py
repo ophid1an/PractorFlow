@@ -40,10 +40,94 @@ class Message:
 
 @dataclass
 class Session:
-    """Conversation session with message history."""
+    """Conversation session with message history and document context."""
     session_id: str
     messages: List[Message] = field(default_factory=list)
     instructions: str = None  # System-level instructions
+    documents: List[Dict[str, Any]] = field(default_factory=list)  # Loaded documents for context
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+    
+    def add_document(self, document: Dict[str, Any]) -> None:
+        """
+        Add a document to the session.
+        
+        Args:
+            document: Document dict from DocumentLoader
+                     Format: {"id": "...", "content": "...", "filename": "...", ...}
+        """
+        # Check if document with same ID already exists
+        existing_ids = {doc["id"] for doc in self.documents}
+        
+        if document["id"] in existing_ids:
+            # Update existing document
+            for i, doc in enumerate(self.documents):
+                if doc["id"] == document["id"]:
+                    self.documents[i] = document
+                    break
+        else:
+            # Add new document
+            self.documents.append(document)
+        
+        # Update timestamp
+        self.updated_at = datetime.now()
+    
+    def remove_document(self, document_id: str) -> bool:
+        """
+        Remove a document from the session by ID.
+        
+        Args:
+            document_id: Document ID to remove
+            
+        Returns:
+            True if document was found and removed, False otherwise
+        """
+        initial_length = len(self.documents)
+        self.documents = [doc for doc in self.documents if doc["id"] != document_id]
+        
+        if len(self.documents) < initial_length:
+            self.updated_at = datetime.now()
+            return True
+        return False
+    
+    def get_document(self, document_id: str) -> Dict[str, Any]:
+        """
+        Get a document by ID.
+        
+        Args:
+            document_id: Document ID to retrieve
+            
+        Returns:
+            Document dict or None if not found
+        """
+        for doc in self.documents:
+            if doc["id"] == document_id:
+                return doc
+        return None
+    
+    def clear_documents(self) -> None:
+        """Remove all documents from the session."""
+        if self.documents:
+            self.documents = []
+            self.updated_at = datetime.now()
+    
+    def get_document_count(self) -> int:
+        """Get the number of documents in the session."""
+        return len(self.documents)
+    
+    def list_documents(self) -> List[Dict[str, str]]:
+        """
+        Get a list of document summaries.
+        
+        Returns:
+            List of dicts with id, filename, file_type
+        """
+        return [
+            {
+                "id": doc["id"],
+                "filename": doc["filename"],
+                "file_type": doc.get("file_type", "unknown")
+            }
+            for doc in self.documents
+        ]

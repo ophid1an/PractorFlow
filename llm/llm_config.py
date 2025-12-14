@@ -10,7 +10,7 @@ class LLMConfig:
     model_name: str = "Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf"
     device: str = "cpu"
     dtype: torch.dtype = torch.bfloat16
-    max_new_tokens: int = 512
+    max_new_tokens: int = 2048
     temperature: float = 0.7
     top_p: float = 0.9
 
@@ -19,9 +19,9 @@ class LLMConfig:
     local_model_path: Optional[str] = None
     models_dir: str = "./models"
 
-    n_gpu_layers: int = 0  # CPU-only
-    n_ctx: int = 4096
-    n_batch: int = 512
+    n_gpu_layers: int = -1  # CPU-only
+    n_ctx: int = 65536
+    n_batch: int = 2048
 
     backend: Optional[str] = "llama_cpp"
 

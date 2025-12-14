@@ -1,5 +1,7 @@
 torch
-git+https://github.com/huggingface/transformers
+transformers
 accelerate
 mistral-common
 protobuf
+docling
+chardet
