@@ -45,3 +45,12 @@ class LLMConfig:
     # Large chunks for generation (context to LLM)
     context_chunk_size: int = 1024
     context_chunk_overlap: int = 100
+
+    # ChromaDB / Vector Store settings
+    chroma_persist_dir: str = "./chroma_db"
+    chroma_collection_name: str = "temp_vectors"
+    chroma_distance_metric: str = "cosine"
+    chroma_batch_size: int = 100
+    
+    # TTL settings
+    default_ttl_hours: int = 24

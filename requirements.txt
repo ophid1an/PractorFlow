@@ -6,3 +6,4 @@ protobuf
 docling
 chardet
 sentence-transformers
+chromadb

@@ -9,7 +9,9 @@ from llm.llm_config import LLMConfig
 from llm.base.llm_runner import LLMRunner
 from llm.base.session import Session
 from llm.document.embeddings import SentenceTransformerEmbeddingModel
-from llm.document.memory_vector_store import MemoryVectorStore
+from llm.document.vector_store_config import VectorStoreConfig
+from llm.document.temp_vector_store import TempVectorStore
+from llm.document.vector_cleanup import cleanup_expired_documents, get_cleanup_status, CleanupResult
 from llm.document.document_loader import DocumentLoader
 
 
@@ -44,7 +46,8 @@ class LlamaCppRunner(LLMRunner):
             llama_kwargs["n_batch"] = config.n_batch
 
         self.model = Llama(**llama_kwargs)
-
+        # Disable the prompt cache
+        self.model.set_cache(None)
         if hasattr(self.model, 'n_ctx'):
             self.max_context_length = self.model.n_ctx()
         else:
@@ -59,9 +62,19 @@ class LlamaCppRunner(LLMRunner):
             cache_dir=config.models_dir
         )
         
-        # Vector store for SMALL retrieval chunks
-        print("[llama_cpp] Initializing vector store...")
-        self.vector_store = MemoryVectorStore(
+        # Initialize vector store config
+        vector_store_config = VectorStoreConfig(
+            persist_directory=config.chroma_persist_dir,
+            collection_name=config.chroma_collection_name,
+            default_ttl_hours=config.default_ttl_hours,
+            distance_metric=config.chroma_distance_metric,
+            batch_size=config.chroma_batch_size
+        )
+        
+        # Vector store for SMALL retrieval chunks (ChromaDB-based with TTL)
+        print("[llama_cpp] Initializing ChromaDB vector store...")
+        self.vector_store = TempVectorStore(
+            config=vector_store_config,
             dimension=self.embedding_model.embedding_dimension
         )
         
@@ -76,7 +89,7 @@ class LlamaCppRunner(LLMRunner):
             context_chunk_overlap=config.context_chunk_overlap,
         )
         
-        print("[llama_cpp] Small-to-Big RAG initialized")
+        print("[llama_cpp] Small-to-Big RAG with ChromaDB initialized")
 
     def _resolve_model_path(self) -> str:
         if self.config.local_model_path:
@@ -109,11 +122,25 @@ class LlamaCppRunner(LLMRunner):
                 return os.path.join(dirpath, filename)
         return None
 
-    def load_document(self, filepath: str) -> Dict[str, Any]:
-        """Load document with Small-to-Big chunking."""
+    def load_document(
+        self,
+        filepath: str,
+        ttl_hours: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Load document with Small-to-Big chunking.
+        
+        Args:
+            filepath: Path to the document file
+            ttl_hours: Optional TTL override (uses config default if not provided)
+            
+        Returns:
+            Loaded document dict
+        """
         print(f"[Document] Loading: {filepath}")
         
         document = self._doc_loader.load_file(filepath)
+        doc_id = document["id"]
         
         # Store document in session
         if self.session:
@@ -126,7 +153,6 @@ class LlamaCppRunner(LLMRunner):
         context_chunks = document.get("context_chunks", [])
         
         # Store context chunks (parent chunks) in context_store
-        doc_id = document["id"]
         for ctx_chunk in context_chunks:
             store_key = f"{doc_id}_{ctx_chunk['id']}"
             self.context_store[store_key] = {
@@ -142,95 +168,180 @@ class LlamaCppRunner(LLMRunner):
             chunk_texts = [chunk["text"] for chunk in retrieval_chunks]
             embeddings = self.embedding_model.embed_batch(chunk_texts, show_progress=True)
             
-            for i, chunk in enumerate(retrieval_chunks):
+            # Prepare metadata with document_id and parent references
+            chunk_metadatas = []
+            chunk_ids = []
+            
+            for chunk in retrieval_chunks:
                 chunk_id = f"{doc_id}_{chunk['id']}"
                 parent_key = f"{doc_id}_{chunk['parent_id']}"
                 
                 metadata = chunk["metadata"].copy()
                 metadata["document_id"] = doc_id
-                metadata["parent_key"] = parent_key  # Link to context chunk
+                metadata["parent_key"] = parent_key
                 
-                self.vector_store.add(
-                    text=chunk["text"],
-                    vector=embeddings[i],
-                    metadata=metadata,
-                    id=chunk_id
-                )
+                chunk_metadatas.append(metadata)
+                chunk_ids.append(chunk_id)
+            
+            # Batch add to vector store with TTL
+            self.vector_store.add_batch(
+                texts=chunk_texts,
+                vectors=embeddings,
+                metadatas=chunk_metadatas,
+                ids=chunk_ids,
+                ttl_hours=ttl_hours,
+                document_id=doc_id
+            )
         
         print(f"[Document] Loaded: {document['filename']}")
         print(f"[Document] {len(retrieval_chunks)} retrieval chunks → {len(context_chunks)} context chunks")
         
         return document
 
+    def cleanup_expired_documents(self) -> CleanupResult:
+        """
+        Clean up expired documents from vector store and context store.
+        
+        Should be called by external scheduler (cron, celery, etc.).
+        
+        Returns:
+            CleanupResult with cleanup statistics
+        """
+        print("[llama_cpp] Running document cleanup...")
+        
+        result = cleanup_expired_documents(
+            vector_store=self.vector_store,
+            context_store=self.context_store
+        )
+        
+        return result
+    
+    def get_cleanup_status(self) -> Dict[str, Any]:
+        """
+        Get status of expired documents without performing cleanup.
+        
+        Returns:
+            Dictionary with expiration statistics
+        """
+        return get_cleanup_status(
+            vector_store=self.vector_store,
+            context_store=self.context_store
+        )
+
     def generate(
+            self,
+            *,
+            messages: Optional[List[Dict[str, str]]] = None,
+            prompt: Optional[str] = None,
+            instructions: Optional[str] = None,
+            temperature: float = None,
+            top_p: float = None,
+            use_context: bool = True,
+            max_context_docs: Optional[int] = None,
+            max_context_chars: Optional[int] = None,
+        ) -> Dict[str, Any]:
+            """Generate with Small-to-Big retrieval using chat completion API."""
+            start_time = time.time()
+
+            context = None
+            context_sources = []
+            
+            if use_context and self.context_enabled:
+                query = self._extract_query(messages, prompt)
+                
+                if query:
+                    print(f"[Retrieval] Searching for relevant chunks...")
+                    context, context_sources = self._small_to_big_retrieve(
+                        query=query,
+                        max_chunks=max_context_docs or self.config.max_retrieval_chunks,
+                        max_chars=max_context_chars
+                    )
+                    
+                    if context:
+                        print(f"[Retrieval] Retrieved {len(context_sources)} context chunks ({len(context)} chars)")
+
+            # Build chat messages for the API
+            chat_messages = self._build_chat_messages(messages, prompt, instructions, context)
+
+            temp = self._get_temperature(temperature)
+            tp = self._get_top_p(top_p)
+
+            print("[llama_cpp] Generating...")
+            
+            # Use chat completion API instead of raw completion
+            result = self.model.create_chat_completion(
+                messages=chat_messages,
+                temperature=temp,
+                top_p=tp,
+                max_tokens=self.max_new_tokens,
+            )
+            
+            # Extract text from chat completion response
+            text = result["choices"][0]["message"]["content"]
+
+            usage = result.get("usage", {})
+            latency = time.time() - start_time
+
+            response = {
+                "text": text,
+                "usage": {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                },
+                "latency_seconds": latency,
+            }
+            
+            if context:
+                response["context_used"] = context
+                response["context_sources"] = context_sources
+            
+            return response
+
+    def _build_chat_messages(
         self,
-        *,
         messages: Optional[List[Dict[str, str]]] = None,
         prompt: Optional[str] = None,
         instructions: Optional[str] = None,
-        temperature: float = None,
-        top_p: float = None,
-        use_context: bool = True,
-        max_context_docs: Optional[int] = None,
-        max_context_chars: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Generate with Small-to-Big retrieval."""
-        start_time = time.time()
-
-        context = None
-        context_sources = []
+        context: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        """Build chat messages array for create_chat_completion API."""
+        if messages is not None and prompt is not None:
+            raise ValueError("Cannot provide both messages and prompt")
+        if messages is None and prompt is None:
+            raise ValueError("Must provide either messages or prompt")
         
-        if use_context and self.context_enabled:
-            query = self._extract_query(messages, prompt)
-            
-            if query:
-                print(f"[Retrieval] Searching for relevant chunks...")
-                context, context_sources = self._small_to_big_retrieve(
-                    query=query,
-                    max_chunks=max_context_docs or self.config.max_retrieval_chunks,
-                    max_chars=max_context_chars
-                )
-                
-                if context:
-                    print(f"[Retrieval] Retrieved {len(context_sources)} context chunks ({len(context)} chars)")
-
-        final_prompt = self._build_prompt(messages, prompt, instructions, context)
-
-        temp = self._get_temperature(temperature)
-        tp = self._get_top_p(top_p)
-
-        print("[llama_cpp] Generating...")
+        chat_messages = []
         
-        gen_kwargs = {
-            "temperature": temp,
-            "top_p": tp,
-        }
-        
-        if self.max_new_tokens is not None:
-            gen_kwargs["max_tokens"] = self.max_new_tokens
-
-        result = self.model(final_prompt, **gen_kwargs)
-        text = result["choices"][0]["text"]
-
-        usage = result.get("usage", {})
-        latency = time.time() - start_time
-
-        response = {
-            "text": text,
-            "usage": {
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens": usage.get("total_tokens", 0),
-            },
-            "latency_seconds": latency,
-        }
-        
+        # Build system message from instructions and context
+        system_parts = []
+        if instructions:
+            system_parts.append(instructions)
         if context:
-            response["context_used"] = context
-            response["context_sources"] = context_sources
+            system_parts.append(f"---CONTEXT---\n{context}\n---END CONTEXT---")
+            system_parts.append("Use the above context to answer the user's question when relevant.")
         
-        return response
-
+        if system_parts:
+            chat_messages.append({
+                "role": "system",
+                "content": "\n\n".join(system_parts)
+            })
+        
+        # Add conversation messages
+        if messages is not None:
+            for msg in messages:
+                chat_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        else:
+            # Single prompt becomes a user message
+            chat_messages.append({
+                "role": "user",
+                "content": prompt
+            })
+        
+        return chat_messages
     def _small_to_big_retrieve(
         self,
         query: str,

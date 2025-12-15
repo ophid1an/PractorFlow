@@ -217,7 +217,6 @@ def main():
         stats = runner_with_session.vector_store.get_stats()
         print(f"Total chunks: {stats['total_entries']}")
         print(f"Embedding dimension: {stats['dimension']}")
-        print(f"Memory usage: {stats['memory_mb']:.2f} MB")
         print()
         
     else:

@@ -9,6 +9,7 @@ Implements Small-to-Big chunking strategy:
 import os
 import base64
 import tempfile
+import uuid
 from pathlib import Path
 from typing import List, Dict, Any, Optional, BinaryIO, Tuple
 import chardet
@@ -83,6 +84,19 @@ class DocumentLoader:
         print(f"[DocumentLoader] Retrieval chunks: {retrieval_chunk_size} chars, overlap {retrieval_chunk_overlap}")
         print(f"[DocumentLoader] Context chunks: {context_chunk_size} chars, overlap {context_chunk_overlap}")
     
+    def _generate_unique_id(self, base_name: str) -> str:
+        """
+        Generate unique document ID.
+        
+        Args:
+            base_name: Base name (e.g., filename stem)
+            
+        Returns:
+            Unique ID in format: basename_uuid8
+        """
+        unique_suffix = uuid.uuid4().hex[:8]
+        return f"{base_name}_{unique_suffix}"
+    
     @property
     def supported_extensions(self) -> set:
         extensions = self.TEXT_EXTENSIONS | self.CODE_EXTENSIONS
@@ -115,6 +129,9 @@ class DocumentLoader:
             content = self._read_text_file(path)
             tables = []
         
+        # Generate unique document ID
+        doc_id = self._generate_unique_id(path.stem)
+        
         # Create Small-to-Big chunks
         retrieval_chunks, context_chunks = self._create_small_to_big_chunks(
             content=content,
@@ -130,7 +147,7 @@ class DocumentLoader:
         }
         
         return {
-            "id": path.stem,
+            "id": doc_id,
             "filename": path.name,
             "content": content,
             "file_type": ext or "no_extension",
@@ -188,6 +205,10 @@ class DocumentLoader:
             content = self._decode_text(file_bytes, filename)
             tables = []
         
+        # Generate unique document ID from filename stem
+        base_name = Path(filename).stem
+        doc_id = self._generate_unique_id(base_name)
+        
         # Create Small-to-Big chunks
         retrieval_chunks, context_chunks = self._create_small_to_big_chunks(
             content=content,
@@ -203,7 +224,7 @@ class DocumentLoader:
         }
         
         return {
-            "id": Path(filename).stem,
+            "id": doc_id,
             "filename": filename,
             "content": content,
             "file_type": extension,
