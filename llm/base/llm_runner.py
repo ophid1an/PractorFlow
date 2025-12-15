@@ -4,18 +4,25 @@ from typing import Dict, Any, List, Optional
 from llm.llm_config import LLMConfig
 from llm.base.session import Session
 from llm.document.document_loader import DocumentLoader
+from knowledge.knowledge_store import KnowledgeStore
 
 
 class LLMRunner(ABC):
     """Abstract base class for LLM runners with RAG support."""
 
-    def __init__(self, config: LLMConfig, session: Optional[Session] = None):
+    def __init__(
+        self,
+        config: LLMConfig,
+        session: Optional[Session] = None,
+        knowledge_store: Optional["KnowledgeStore"] = None
+    ):
         """
         Initialize LLM runner.
         
         Args:
             config: LLM configuration
             session: Optional Session object for context and document management
+            knowledge_store: Optional KnowledgeStore for on-demand document loading
         """
         self.config = config
         self.model_name = config.model_name
@@ -26,6 +33,9 @@ class LLMRunner(ABC):
         # Session and document management
         self.session = session
         self.documents = []  # Fallback if no session
+        
+        # Knowledge store for on-demand loading
+        self.knowledge_store = knowledge_store
 
     @property
     def _document_loader(self):
@@ -113,6 +123,27 @@ class LLMRunner(ABC):
         
         print(f"[Document] Loaded: {document['filename']} ({document['file_type']})")
         return document
+
+    @abstractmethod
+    def load_document_from_knowledge(
+        self,
+        document_id: str,
+        ttl_hours: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Load a document from knowledge store into temporary context.
+        
+        Args:
+            document_id: Document ID in the knowledge store
+            ttl_hours: Optional TTL override for temporary storage
+            
+        Returns:
+            Document info dict with loading statistics
+            
+        Raises:
+            ValueError: If knowledge store is not configured or document not found
+        """
+        pass
 
     @abstractmethod
     def generate(

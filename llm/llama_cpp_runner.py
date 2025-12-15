@@ -2,6 +2,7 @@ import time
 import os
 from typing import Dict, Any, Optional, List, Tuple
 
+import numpy as np
 from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
 
@@ -13,13 +14,19 @@ from llm.document.vector_store_config import VectorStoreConfig
 from llm.document.temp_vector_store import TempVectorStore
 from llm.document.vector_cleanup import cleanup_expired_documents, get_cleanup_status, CleanupResult
 from llm.document.document_loader import DocumentLoader
+from knowledge.knowledge_store import KnowledgeStore
 
 
 class LlamaCppRunner(LLMRunner):
     """Runner for GGUF models using llama-cpp-python with Small-to-Big RAG."""
 
-    def __init__(self, config: LLMConfig, session: Optional[Session] = None):
-        super().__init__(config, session)
+    def __init__(
+        self,
+        config: LLMConfig,
+        session: Optional[Session] = None,
+        knowledge_store: Optional["KnowledgeStore"] = None
+    ):
+        super().__init__(config, session, knowledge_store)
         
         os.makedirs(config.models_dir, exist_ok=True)
         model_path = self._resolve_model_path()
@@ -90,6 +97,9 @@ class LlamaCppRunner(LLMRunner):
         )
         
         print("[llama_cpp] Small-to-Big RAG with ChromaDB initialized")
+        
+        if self.knowledge_store:
+            print("[llama_cpp] Knowledge store configured for on-demand loading")
 
     def _resolve_model_path(self) -> str:
         if self.config.local_model_path:
@@ -197,6 +207,110 @@ class LlamaCppRunner(LLMRunner):
         print(f"[Document] {len(retrieval_chunks)} retrieval chunks → {len(context_chunks)} context chunks")
         
         return document
+
+    def load_document_from_knowledge(
+        self,
+        document_id: str,
+        ttl_hours: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Load a document from knowledge store into temporary context.
+        
+        Fetches pre-computed chunks and embeddings from KnowledgeStore
+        and loads them into the temporary vector store and context store.
+        
+        Args:
+            document_id: Document ID in the knowledge store
+            ttl_hours: Optional TTL override for temporary storage
+            
+        Returns:
+            Document info dict with loading statistics
+            
+        Raises:
+            ValueError: If knowledge store is not configured or document not found
+        """
+        if not self.knowledge_store:
+            raise ValueError("Knowledge store is not configured")
+        
+        print(f"[Knowledge] Loading document from knowledge store: {document_id}")
+        
+        # Get document metadata
+        document = self.knowledge_store.get_document(document_id)
+        if not document:
+            raise ValueError(f"Document not found in knowledge store: {document_id}")
+        
+        doc_metadata = document.get("metadata", {})
+        filename = doc_metadata.get("filename", "unknown")
+        
+        print(f"[Knowledge] Found document: {filename}")
+        
+        # Get retrieval chunks with embeddings
+        retrieval_chunks = self.knowledge_store.get_retrieval_chunks_by_document(document_id)
+        
+        # Get context chunks
+        context_chunks = self.knowledge_store.get_context_chunks_by_document(document_id)
+        
+        print(f"[Knowledge] Retrieved {len(retrieval_chunks)} retrieval chunks, {len(context_chunks)} context chunks")
+        
+        # Load context chunks into context_store
+        context_loaded = 0
+        for ctx_chunk in context_chunks:
+            ctx_id = ctx_chunk["id"]  # Already prefixed with doc_id from knowledge store
+            self.context_store[ctx_id] = {
+                "text": ctx_chunk["text"],
+                "metadata": ctx_chunk.get("metadata", {}),
+                "document_id": document_id,
+            }
+            context_loaded += 1
+        
+        # Load retrieval chunks into vector store
+        retrieval_loaded = 0
+        if retrieval_chunks:
+            chunk_texts = []
+            chunk_vectors = []
+            chunk_metadatas = []
+            chunk_ids = []
+            
+            for chunk in retrieval_chunks:
+                # Skip chunks without embeddings
+                if "vector" not in chunk or chunk["vector"] is None:
+                    print(f"[Knowledge] Warning: Chunk {chunk['id']} has no embedding, skipping")
+                    continue
+                
+                chunk_id = chunk["id"]  # Already prefixed with doc_id
+                chunk_texts.append(chunk["text"])
+                chunk_vectors.append(chunk["vector"])
+                
+                metadata = chunk.get("metadata", {}).copy()
+                metadata["document_id"] = document_id
+                metadata["source"] = "knowledge_store"
+                chunk_metadatas.append(metadata)
+                chunk_ids.append(chunk_id)
+            
+            if chunk_vectors:
+                # Stack vectors into numpy array
+                vectors_array = np.vstack(chunk_vectors)
+                
+                # Batch add to vector store with TTL
+                self.vector_store.add_batch(
+                    texts=chunk_texts,
+                    vectors=vectors_array,
+                    metadatas=chunk_metadatas,
+                    ids=chunk_ids,
+                    ttl_hours=ttl_hours,
+                    document_id=document_id
+                )
+                retrieval_loaded = len(chunk_ids)
+        
+        print(f"[Knowledge] Loaded into temp storage: {retrieval_loaded} retrieval chunks, {context_loaded} context chunks")
+        
+        return {
+            "document_id": document_id,
+            "filename": filename,
+            "retrieval_chunks_loaded": retrieval_loaded,
+            "context_chunks_loaded": context_loaded,
+            "ttl_hours": ttl_hours or self.config.default_ttl_hours,
+        }
 
     def cleanup_expired_documents(self) -> CleanupResult:
         """
@@ -342,6 +456,7 @@ class LlamaCppRunner(LLMRunner):
             })
         
         return chat_messages
+
     def _small_to_big_retrieve(
         self,
         query: str,
