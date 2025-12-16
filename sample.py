@@ -100,7 +100,7 @@ def main():
             prompt=question
         )
         
-        print(f"Response: {result4['reply']}")
+        print(f"Response<{result4['latency_seconds']} s>: {result4['reply']}")
         if 'context_sources' in result4:
             print(f"\nSources used:")
             for src in result4['context_sources']:
@@ -134,7 +134,7 @@ def main():
                 prompt=question2
             )
             
-            print(f"Response: {result5['reply']}")
+            print(f"Response<{result5['latency_seconds']} s>: {result5['reply']}")
             if 'context_sources' in result5:
                 print(f"\nRetrieved {len(result5['context_sources'])} relevant chunks")
             print()
@@ -196,7 +196,7 @@ def main():
                 prompt=question3
             )
             
-            print(f"Response: {result6['reply']}")
+            print(f"Response<{result6['latency_seconds']} s>: {result6['reply']}")
             if 'context_sources' in result6:
                 print(f"\nTop relevant chunks:")
                 for src in result6['context_sources'][:3]:

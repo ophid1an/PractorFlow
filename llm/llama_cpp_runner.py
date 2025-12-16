@@ -476,14 +476,24 @@ class LlamaCppRunner(LLMRunner):
         
         chat_messages = []
         
-        # Build system message from instructions and context
+        # Build system message with clearer context formatting
         system_parts = []
+        
+        # Add instructions first if provided
         if instructions:
             system_parts.append(instructions)
-        if context:
-            system_parts.append(f"---CONTEXT---\n{context}\n---END CONTEXT---")
-            system_parts.append("Use the above context to answer the user's question when relevant.")
         
+        # Add context with explicit formatting and instructions
+        if context:
+            context_instruction = (
+                "You have been provided with relevant information from documents below. "
+                "Use this information to answer the user's question accurately. "
+                "Reference specific details from the context when relevant."
+            )
+            system_parts.append(context_instruction)
+            system_parts.append(f"\n=== DOCUMENT CONTEXT ===\n{context}\n=== END CONTEXT ===\n")
+        
+        # Create system message if we have any parts
         if system_parts:
             chat_messages.append({
                 "role": "system",
@@ -561,14 +571,17 @@ class LlamaCppRunner(LLMRunner):
         if not parent_chunks:
             return None, []
         
-        # Step 3: Build context from parent chunks
+        # Step 3: Build context from parent chunks with clear section markers
         context_parts = []
         sources = []
         
-        for parent in parent_chunks:
+        for idx, parent in enumerate(parent_chunks, 1):
             text = parent["text"]
             filename = parent["metadata"].get("filename", "unknown")
-            context_parts.append(f"[{filename}]\n{text}")
+            
+            # Format each chunk clearly with section number and source
+            chunk_header = f"--- Section {idx} (Source: {filename}) ---"
+            context_parts.append(f"{chunk_header}\n{text}")
             
             sources.append({
                 "parent_key": parent["parent_key"],
@@ -577,7 +590,8 @@ class LlamaCppRunner(LLMRunner):
                 "chars": len(text),
             })
         
-        context = "\n\n---\n\n".join(context_parts)
+        # Join with clear separators
+        context = "\n\n".join(context_parts)
         return context, sources
 
     def _extract_query(
