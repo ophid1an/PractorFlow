@@ -6,7 +6,7 @@ Allows adaptation to different vector store backends (ChromaDB, Pinecone, Weavia
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Tuple, BinaryIO
+from typing import Dict, Any, List, Optional, Set, BinaryIO
 import numpy as np
 
 
@@ -16,9 +16,9 @@ class KnowledgeStore(ABC):
     
     Implementations should provide durable document storage with:
     - Document ingestion (file, bytes, base64, stream)
-    - Vector similarity search
+    - Vector similarity search with optional document scoping
+    - Small-to-Big retrieval (search small chunks, return parent context)
     - CRUD operations on documents and chunks
-    - No TTL/expiration (permanent storage)
     """
     
     @abstractmethod
@@ -94,6 +94,8 @@ class KnowledgeStore(ABC):
         """
         Load and store a document from a file stream.
         
+        Compatible with FastAPI UploadFile.file and similar interfaces.
+        
         Args:
             file_stream: File-like object with read() method
             filename: Filename with extension
@@ -122,6 +124,35 @@ class KnowledgeStore(ABC):
             
         Returns:
             List of result dicts with id, text, similarity, metadata
+        """
+        pass
+    
+    @abstractmethod
+    def search_scoped(
+        self,
+        query: str,
+        top_k: int = 10,
+        document_ids: Optional[Set[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search with Small-to-Big retrieval, optionally scoped to specific documents.
+        
+        Searches small retrieval chunks for similarity, then returns the
+        corresponding parent (context) chunks for richer LLM context.
+        
+        Args:
+            query: Text query to search for
+            top_k: Maximum number of parent chunks to return
+            document_ids: Optional set of document IDs to scope search to.
+                         If None, searches all documents.
+            
+        Returns:
+            List of parent chunk dicts with:
+            - id: Parent chunk ID
+            - text: Full parent chunk text
+            - similarity: Best similarity score from child chunks
+            - metadata: Chunk metadata including document_id, filename
+            - document_id: Source document ID
         """
         pass
     
@@ -181,38 +212,6 @@ class KnowledgeStore(ABC):
             
         Returns:
             Context chunk dict or None if not found
-        """
-        pass
-    
-    @abstractmethod
-    def get_retrieval_chunks_by_document(
-        self,
-        document_id: str
-    ) -> List[Dict[str, Any]]:
-        """
-        Get all retrieval chunks for a specific document.
-        
-        Args:
-            document_id: Document ID to get chunks for
-            
-        Returns:
-            List of retrieval chunk dicts with id, text, metadata, vector
-        """
-        pass
-    
-    @abstractmethod
-    def get_context_chunks_by_document(
-        self,
-        document_id: str
-    ) -> List[Dict[str, Any]]:
-        """
-        Get all context (parent) chunks for a specific document.
-        
-        Args:
-            document_id: Document ID to get context chunks for
-            
-        Returns:
-            List of context chunk dicts with id, text, metadata
         """
         pass
     

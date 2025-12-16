@@ -7,7 +7,7 @@ Uses Small-to-Big chunking strategy via DocumentLoader.
 Features:
 - Persistent storage via ChromaDB PersistentClient
 - Small-to-Big chunking (small chunks for retrieval, large for context)
-- No TTL/expiration - permanent storage
+- Scoped search by document IDs
 - Cosine similarity search
 - Full CRUD operations
 """
@@ -15,7 +15,7 @@ Features:
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, BinaryIO
+from typing import Dict, Any, List, Optional, Set, BinaryIO
 import numpy as np
 import chromadb
 from chromadb.config import Settings
@@ -310,6 +310,119 @@ class ChromaKnowledgeStore(KnowledgeStore):
         # Embed query
         query_vector = self.embedding_model.embed(query)
         return self.search_by_vector(query_vector, top_k, filter_metadata)
+    
+    def search_scoped(
+        self,
+        query: str,
+        top_k: int = 10,
+        document_ids: Optional[Set[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search with Small-to-Big retrieval, optionally scoped to specific documents.
+        
+        Searches small retrieval chunks for similarity, then returns the
+        corresponding parent (context) chunks for richer LLM context.
+        
+        Args:
+            query: Text query to search for
+            top_k: Maximum number of parent chunks to return
+            document_ids: Optional set of document IDs to scope search to.
+                         If None, searches all documents.
+            
+        Returns:
+            List of parent chunk dicts with id, text, similarity, metadata, document_id
+        """
+        if self.retrieval_collection.count() == 0:
+            return []
+        
+        # Embed query
+        query_vector = self.embedding_model.embed(query)
+        query_list = query_vector.tolist()
+        
+        # Build where clause for document scoping
+        where_clause = None
+        if document_ids:
+            doc_id_list = list(document_ids)
+            if len(doc_id_list) == 1:
+                where_clause = {"document_id": {"$eq": doc_id_list[0]}}
+            else:
+                where_clause = {"document_id": {"$in": doc_id_list}}
+        
+        # Search retrieval chunks (get more than needed to account for parent deduplication)
+        search_k = top_k * 3
+        
+        results = self.retrieval_collection.query(
+            query_embeddings=[query_list],
+            n_results=search_k,
+            where=where_clause,
+            include=["documents", "metadatas", "distances"]
+        )
+        
+        if not results or not results['ids'] or not results['ids'][0]:
+            return []
+        
+        # Extract results
+        ids = results['ids'][0]
+        metadatas = results['metadatas'][0] if results['metadatas'] else [{}] * len(ids)
+        distances = results['distances'][0] if results['distances'] else [0.0] * len(ids)
+        
+        # Deduplicate by parent chunk, keeping best similarity
+        seen_parents = {}
+        
+        for i, chunk_id in enumerate(ids):
+            metadata = metadatas[i] if metadatas[i] else {}
+            parent_key = metadata.get("parent_key")
+            
+            if not parent_key:
+                continue
+            
+            similarity = 1.0 - distances[i]
+            
+            if parent_key not in seen_parents or similarity > seen_parents[parent_key]["similarity"]:
+                seen_parents[parent_key] = {
+                    "parent_key": parent_key,
+                    "similarity": similarity,
+                    "document_id": metadata.get("document_id"),
+                    "filename": metadata.get("filename"),
+                }
+        
+        # Sort by similarity and limit to top_k
+        sorted_parents = sorted(
+            seen_parents.values(),
+            key=lambda x: x["similarity"],
+            reverse=True
+        )[:top_k]
+        
+        # Fetch parent (context) chunks
+        output = []
+        for parent_info in sorted_parents:
+            parent_key = parent_info["parent_key"]
+            
+            try:
+                parent_result = self.context_collection.get(
+                    ids=[parent_key],
+                    include=["documents", "metadatas"]
+                )
+                
+                if parent_result and parent_result['ids']:
+                    parent_text = parent_result['documents'][0] if parent_result['documents'] else ''
+                    parent_metadata = parent_result['metadatas'][0] if parent_result['metadatas'] else {}
+                    
+                    output.append({
+                        "id": parent_key,
+                        "text": parent_text,
+                        "similarity": parent_info["similarity"],
+                        "metadata": parent_metadata,
+                        "document_id": parent_info["document_id"],
+                        "filename": parent_info["filename"],
+                    })
+            except Exception as e:
+                print(f"[ChromaKnowledgeStore] Error fetching parent chunk {parent_key}: {e}")
+                continue
+        
+        print(f"[ChromaKnowledgeStore] search_scoped: {len(output)} parent chunks from {len(ids)} retrieval hits")
+        
+        return output
     
     def search_by_vector(
         self,

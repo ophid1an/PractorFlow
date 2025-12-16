@@ -12,7 +12,6 @@ __all__ = [
     "Message",
     "Session",
     "SessionStore",
-    "TransformersRunner",
     "LlamaCppRunner",
     "create_runner",
 ]

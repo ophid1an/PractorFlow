@@ -1,28 +1,29 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 
 from llm.llm_config import LLMConfig
 from llm.base.session import Session
-from llm.document.document_loader import DocumentLoader
 from llm.knowledge.knowledge_store import KnowledgeStore
+from llm.tools.tool_registry import ToolRegistry
+from llm.tools.base import ToolResult
 
 
 class LLMRunner(ABC):
-    """Abstract base class for LLM runners with RAG support."""
+    """Abstract base class for LLM runners with tool support."""
 
     def __init__(
         self,
         config: LLMConfig,
         session: Optional[Session] = None,
-        knowledge_store: Optional["KnowledgeStore"] = None
+        knowledge_store: Optional[KnowledgeStore] = None
     ):
         """
         Initialize LLM runner.
         
         Args:
             config: LLM configuration
-            session: Optional Session object for context and document management
-            knowledge_store: Optional KnowledgeStore for on-demand document loading
+            session: Optional Session object for conversation management
+            knowledge_store: Optional KnowledgeStore for document search
         """
         self.config = config
         self.model_name = config.model_name
@@ -30,120 +31,76 @@ class LLMRunner(ABC):
         self.dtype = config.dtype
         self.max_new_tokens = config.max_new_tokens
         
-        # Session and document management
+        # Session management
         self.session = session
-        self.documents = []  # Fallback if no session
         
-        # Knowledge store for on-demand loading
+        # Knowledge store
         self.knowledge_store = knowledge_store
+        
+        # Tool registry
+        self.tool_registry = ToolRegistry()
+        
+        # Pending context from tool execution
+        self._pending_context: Optional[str] = None
 
-    @property
-    def _document_loader(self):
-        """Get document loader with tokenizer."""
-        # Note: Subclasses must implement tokenizer property
-        if not hasattr(self, '_doc_loader') or self._doc_loader is None:
-            tokenizer = getattr(self, 'tokenizer', None)
-            self._doc_loader = DocumentLoader(tokenizer=tokenizer)
-        return self._doc_loader
-
-    @property
-    def _active_documents(self) -> List[Dict[str, Any]]:
-        """Get active documents from session or fallback."""
-        if self.session:
-            return self.session.documents
-        return self.documents
-
-    @property
-    def context_enabled(self) -> bool:
-        """Check if context is enabled (has documents)."""
-        return len(self._active_documents) > 0
-
-    def load_document_from_base64(
-        self,
-        base64_data: str,
-        filename: Optional[str] = None,
-        mime_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def set_document_scope(self, document_ids: Optional[Set[str]]) -> None:
         """
-        Load a document from base64 data and add to session.
+        Set document scope for knowledge search.
         
         Args:
-            base64_data: Base64 encoded file data
-            filename: Optional filename with extension
-            mime_type: Optional MIME type
-            
-        Returns:
-            Loaded document dict
+            document_ids: Set of document IDs to scope searches to,
+                         or None to search all documents
         """
-        print(f"[Document] Loading from base64: {filename or 'unknown'}")
-        document = self._document_loader.load_from_base64(base64_data, filename, mime_type)
-        
-        if self.session:
-            self.session.add_document(document)
-        else:
-            existing_ids = {doc["id"] for doc in self.documents}
-            if document["id"] in existing_ids:
-                self.documents = [doc if doc["id"] != document["id"] else document 
-                                 for doc in self.documents]
-            else:
-                self.documents.append(document)
-        
-        print(f"[Document] Loaded: {document['filename']} ({document['file_type']})")
-        return document
+        self.tool_registry.set_document_scope(document_ids)
+    
+    def clear_document_scope(self) -> None:
+        """Clear document scope to search all documents."""
+        self.tool_registry.clear_document_scope()
+    
+    def get_document_scope(self) -> Optional[Set[str]]:
+        """Get current document scope."""
+        return self.tool_registry.get_document_scope()
 
-    def load_document_from_stream(
-        self,
-        file_stream: Any,
-        filename: str,
-        mime_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def search(self, query: str, top_k: Optional[int] = None) -> ToolResult:
         """
-        Load a document from a file stream (e.g., FastAPI UploadFile).
+        Search knowledge base within current document scope.
+        
+        Results are stored as pending context for the next generate() call.
         
         Args:
-            file_stream: File-like object with read() method
-            filename: Filename with extension
-            mime_type: Optional MIME type
+            query: Search query string
+            top_k: Maximum number of results (uses config default if not provided)
             
         Returns:
-            Loaded document dict
+            ToolResult with search results
         """
-        print(f"[Document] Loading from stream: {filename}")
-        document = self._document_loader.load_from_stream(file_stream, filename, mime_type)
+        if "knowledge_search" not in self.tool_registry:
+            return ToolResult(
+                success=False,
+                error="Knowledge search tool not available. Ensure knowledge_store is configured."
+            )
         
-        if self.session:
-            self.session.add_document(document)
-        else:
-            existing_ids = {doc["id"] for doc in self.documents}
-            if document["id"] in existing_ids:
-                self.documents = [doc if doc["id"] != document["id"] else document 
-                                 for doc in self.documents]
-            else:
-                self.documents.append(document)
+        search_top_k = top_k if top_k is not None else self.config.max_search_results
         
-        print(f"[Document] Loaded: {document['filename']} ({document['file_type']})")
-        return document
-
-    @abstractmethod
-    def load_document_from_knowledge(
-        self,
-        document_id: str,
-        ttl_hours: Optional[int] = None
-    ) -> Dict[str, Any]:
-        """
-        Load a document from knowledge store into temporary context.
+        result = self.tool_registry.execute(
+            "knowledge_search",
+            query=query,
+            top_k=search_top_k
+        )
         
-        Args:
-            document_id: Document ID in the knowledge store
-            ttl_hours: Optional TTL override for temporary storage
-            
-        Returns:
-            Document info dict with loading statistics
-            
-        Raises:
-            ValueError: If knowledge store is not configured or document not found
-        """
-        pass
+        # Store successful results as pending context
+        if result.success and result.data:
+            self._pending_context = result.to_context_string()
+        
+        return result
+    
+    def clear_pending_context(self) -> None:
+        """Clear any pending context from tool execution."""
+        self._pending_context = None
+    
+    def has_pending_context(self) -> bool:
+        """Check if there's pending context from a tool execution."""
+        return self._pending_context is not None
 
     @abstractmethod
     def generate(
@@ -155,66 +112,37 @@ class LLMRunner(ABC):
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Generate text from messages or prompt with optional document context.
+        """
+        Generate text from messages or prompt with optional context.
+        
+        If search() was called before generate(), the search results
+        are automatically included as context.
 
         Args:
             messages: List of message dicts with 'role' and 'content' keys
-            prompt: Single prompt string (for backward compatibility)
+            prompt: Single prompt string (alternative to messages)
             instructions: System-level instructions/prompt
             temperature: Sampling temperature (uses config default if None)
             top_p: Nucleus sampling parameter (uses config default if None)
 
         Returns:
             Dictionary with keys:
-                - reply: Raw response from the model backend (structure depends on
-                         model's chat template, use get_chat_reply_structure() to understand it)
+                - reply: Response from the model
                 - latency_seconds: Generation time in seconds
-                - context_used: (optional) Context string if RAG was applied
-                - context_sources: (optional) List of source metadata if RAG was applied
+                - context_used: (optional) Context string if search was used
+                - search_metadata: (optional) Metadata about search results
             
         Note: Either messages or prompt must be provided, not both.
         """
         pass
 
     @abstractmethod
-    def unload_document(self, document_id: str) -> bool:
-        """
-        Unload a document from temporary context.
-        
-        Removes the document's chunks from vector store and context store.
-        Use for documents loaded via load_document().
-        
-        Args:
-            document_id: Document ID to unload
-            
-        Returns:
-            True if document was found and unloaded, False otherwise
-        """
-        pass
-
-    @abstractmethod
-    def unload_document_from_knowledge(self, document_id: str) -> bool:
-        """
-        Unload a document from temporary context.
-        
-        Removes the document's chunks from vector store and context store.
-        Use for documents loaded via load_document_from_knowledge().
-        
-        Args:
-            document_id: Document ID to unload
-            
-        Returns:
-            True if document was found and unloaded, False otherwise
-        """
-        pass
-
-    @abstractmethod
     def get_chat_reply_structure(self) -> Optional[str]:
-        """Get the chat template that describes the structure of the reply field.
+        """
+        Get the chat template that describes the structure of the reply field.
         
         Returns:
             The chat template string from the model, or None if not available.
-            This helps users understand how to parse/interpret the reply content.
         """
         pass
 
@@ -225,3 +153,14 @@ class LLMRunner(ABC):
     def _get_top_p(self, top_p: float = None) -> float:
         """Get top_p value, falling back to config default."""
         return top_p if top_p is not None else self.config.top_p
+    
+    def _consume_pending_context(self) -> Optional[str]:
+        """
+        Get and clear pending context.
+        
+        Returns:
+            Context string if available, None otherwise
+        """
+        context = self._pending_context
+        self._pending_context = None
+        return context

@@ -32,28 +32,5 @@ class LLMConfig:
     # Generation settings
     stop_tokens: Optional[List[str]] = None
 
-    # RAG / Retrieval settings
-    max_retrieval_chunks: int = 10
-    chars_per_token: int = 3
-    reserved_tokens: int = 4096
-
-    # Embedding model
-    embedding_model_name: str = "all-MiniLM-L6-v2"
-
-    # Small-to-Big Chunking settings
-    # Small chunks for retrieval (embedding/search)
-    retrieval_chunk_size: int = 128
-    retrieval_chunk_overlap: int = 20
-    
-    # Large chunks for generation (context to LLM)
-    context_chunk_size: int = 1024
-    context_chunk_overlap: int = 100
-
-    # ChromaDB / Vector Store settings
-    chroma_persist_dir: str = "./chroma_db"
-    chroma_collection_name: str = "temp_vectors"
-    chroma_distance_metric: str = "cosine"
-    chroma_batch_size: int = 100
-    
-    # TTL settings
-    default_ttl_hours: int = 24
+    # Knowledge search settings
+    max_search_results: int = 5
