@@ -1,0 +1,21 @@
+# Vision-enabled llama-cpp-python for Qwen3VL-GGUF support
+# CUDA 12.8, Python 3.12, Linux (WSL2)
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.8-cu128/llama_cpp_python-0.3.8+cu128-cp312-cp312-manylinux_2_31_x86_64.whl
+
+# Core dependencies (from your requirements.txt)
+torch
+transformers
+accelerate
+mistral-common
+protobuf
+docling
+chardet
+sentence-transformers
+chromadb
+
+# Additional for vision models
+pillow
+numpy
+
+# Optional: For downloading models
+huggingface-hub

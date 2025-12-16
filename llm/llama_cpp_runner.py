@@ -14,7 +14,7 @@ from llm.document.vector_store_config import VectorStoreConfig
 from llm.document.temp_vector_store import TempVectorStore
 from llm.document.vector_cleanup import cleanup_expired_documents, get_cleanup_status, CleanupResult
 from llm.document.document_loader import DocumentLoader
-from knowledge.knowledge_store import KnowledgeStore
+from llm.knowledge.knowledge_store import KnowledgeStore
 
 
 class LlamaCppRunner(LLMRunner):
@@ -342,75 +342,124 @@ class LlamaCppRunner(LLMRunner):
             context_store=self.context_store
         )
 
+    def unload_document(self, document_id: str) -> bool:
+        """
+        Unload a document from temporary context.
+        
+        Removes the document's chunks from vector store.
+        Use for documents loaded via load_document().
+        
+        Args:
+            document_id: Document ID to unload
+            
+        Returns:
+            True if document was found and unloaded, False otherwise
+        """
+        deleted_chunks = self.vector_store.delete_by_document_id(document_id)
+        return deleted_chunks > 0
+
+    def unload_document_from_knowledge(self, document_id: str) -> bool:
+        """
+        Unload a document from temporary context.
+        
+        Removes the document's chunks from context store only.
+        Vector store chunks have TTL and will expire automatically.
+        Use for documents loaded via load_document_from_knowledge().
+        
+        Args:
+            document_id: Document ID to unload
+            
+        Returns:
+            True if document was found and unloaded, False otherwise
+        """
+        context_keys_to_remove = [
+            key for key, data in self.context_store.items()
+            if data.get("document_id") == document_id
+        ]
+        
+        for key in context_keys_to_remove:
+            del self.context_store[key]
+        
+        return len(context_keys_to_remove) > 0
+
+    def get_chat_reply_structure(self) -> Optional[str]:
+        """Get the chat template that describes the structure of the reply field.
+        
+        Returns:
+            The chat template string from the model's GGUF metadata,
+            or None if not available.
+        """
+        try:
+            metadata = self.model.metadata
+            if metadata and "tokenizer.chat_template" in metadata:
+                return metadata["tokenizer.chat_template"]
+        except Exception:
+            pass
+        return None
+
     def generate(
-            self,
-            *,
-            messages: Optional[List[Dict[str, str]]] = None,
-            prompt: Optional[str] = None,
-            instructions: Optional[str] = None,
-            temperature: float = None,
-            top_p: float = None,
-            use_context: bool = True,
-            max_context_docs: Optional[int] = None,
-            max_context_chars: Optional[int] = None,
-        ) -> Dict[str, Any]:
-            """Generate with Small-to-Big retrieval using chat completion API."""
-            start_time = time.time()
+        self,
+        *,
+        messages: Optional[List[Dict[str, str]]] = None,
+        prompt: Optional[str] = None,
+        instructions: Optional[str] = None,
+        temperature: float = None,
+        top_p: float = None,
+    ) -> Dict[str, Any]:
+        """Generate with Small-to-Big retrieval using chat completion API."""
+        start_time = time.time()
 
-            context = None
-            context_sources = []
+        context = None
+        context_sources = []
+        
+        if self.context_enabled:
+            query = self._extract_query(messages, prompt)
             
-            if use_context and self.context_enabled:
-                query = self._extract_query(messages, prompt)
+            if query:
+                print(f"[Retrieval] Searching for relevant chunks...")
+                context, context_sources = self._small_to_big_retrieve(
+                    query=query,
+                    max_chunks=self.config.max_retrieval_chunks,
+                )
                 
-                if query:
-                    print(f"[Retrieval] Searching for relevant chunks...")
-                    context, context_sources = self._small_to_big_retrieve(
-                        query=query,
-                        max_chunks=max_context_docs or self.config.max_retrieval_chunks,
-                        max_chars=max_context_chars
-                    )
-                    
-                    if context:
-                        print(f"[Retrieval] Retrieved {len(context_sources)} context chunks ({len(context)} chars)")
+                if context:
+                    print(f"[Retrieval] Retrieved {len(context_sources)} context chunks ({len(context)} chars)")
 
-            # Build chat messages for the API
-            chat_messages = self._build_chat_messages(messages, prompt, instructions, context)
+        # Build chat messages for the API
+        chat_messages = self._build_chat_messages(messages, prompt, instructions, context)
 
-            temp = self._get_temperature(temperature)
-            tp = self._get_top_p(top_p)
+        temp = self._get_temperature(temperature)
+        tp = self._get_top_p(top_p)
 
-            print("[llama_cpp] Generating...")
-            
-            # Use chat completion API instead of raw completion
-            result = self.model.create_chat_completion(
-                messages=chat_messages,
-                temperature=temp,
-                top_p=tp,
-                max_tokens=self.max_new_tokens,
-            )
-            
-            # Extract text from chat completion response
-            text = result["choices"][0]["message"]["content"]
+        print("[llama_cpp] Generating...")
+        
+        # Build completion kwargs
+        completion_kwargs = {
+            "messages": chat_messages,
+            "temperature": temp,
+            "top_p": tp,
+            "max_tokens": self.max_new_tokens,
+        }
+        
+        # Add stop tokens if configured
+        if self.config.stop_tokens:
+            completion_kwargs["stop"] = self.config.stop_tokens
+        
+        # Use chat completion API
+        result = self.model.create_chat_completion(**completion_kwargs)
 
-            usage = result.get("usage", {})
-            latency = time.time() - start_time
+        latency = time.time() - start_time
 
-            response = {
-                "text": text,
-                "usage": {
-                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage.get("completion_tokens", 0),
-                    "total_tokens": usage.get("total_tokens", 0),
-                },
-                "latency_seconds": latency,
-            }
-            
-            if context:
-                response["context_used"] = context
-                response["context_sources"] = context_sources
-            
-            return response
+        response = {
+            "reply": result,
+            "latency_seconds": latency,
+        }
+        
+        if context:
+            response["context_used"] = context
+            response["context_sources"] = context_sources
+        
+        return response
 
     def _build_chat_messages(
         self,
@@ -461,7 +510,6 @@ class LlamaCppRunner(LLMRunner):
         self,
         query: str,
         max_chunks: int = 10,
-        max_chars: Optional[int] = None
     ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         """
         Small-to-Big retrieval:
@@ -516,19 +564,9 @@ class LlamaCppRunner(LLMRunner):
         # Step 3: Build context from parent chunks
         context_parts = []
         sources = []
-        total_chars = 0
         
         for parent in parent_chunks:
             text = parent["text"]
-            
-            # Apply char limit if specified
-            if max_chars and total_chars + len(text) > max_chars:
-                remaining = max_chars - total_chars
-                if remaining > 100:  # Only include if meaningful
-                    text = text[:remaining] + "..."
-                else:
-                    break
-            
             filename = parent["metadata"].get("filename", "unknown")
             context_parts.append(f"[{filename}]\n{text}")
             
@@ -538,11 +576,6 @@ class LlamaCppRunner(LLMRunner):
                 "similarity": parent["best_similarity"],
                 "chars": len(text),
             })
-            
-            total_chars += len(text)
-            
-            if max_chars and total_chars >= max_chars:
-                break
         
         context = "\n\n---\n\n".join(context_parts)
         return context, sources
@@ -558,58 +591,6 @@ class LlamaCppRunner(LLMRunner):
                     return msg["content"]
         return prompt
 
-    def _build_prompt(
-        self,
-        messages: Optional[List[Dict[str, str]]] = None,
-        prompt: Optional[str] = None,
-        instructions: Optional[str] = None,
-        context: Optional[str] = None,
-    ) -> str:
-        if messages is not None and prompt is not None:
-            raise ValueError("Cannot provide both messages and prompt")
-        if messages is None and prompt is None:
-            raise ValueError("Must provide either messages or prompt")
-        
-        if messages is not None:
-            return self._format_messages(messages, instructions, context)
-        
-        parts = []
-        if instructions:
-            parts.append(instructions)
-        if context:
-            parts.append(f"---CONTEXT---\n{context}\n---END CONTEXT---")
-        parts.append(prompt)
-        
-        return "\n\n".join(parts)
-
-    def _format_messages(
-        self,
-        messages: List[Dict[str, str]],
-        instructions: Optional[str] = None,
-        context: Optional[str] = None,
-    ) -> str:
-        parts = []
-        
-        if instructions:
-            parts.append(f"Instructions: {instructions}\n")
-        
-        if context:
-            parts.append("---CONTEXT---")
-            parts.append(context)
-            parts.append("---END CONTEXT---\n")
-            parts.append("Use the above context to answer the question.\n")
-        
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        
-        parts.append("Assistant:")
-        return "\n".join(parts)
-    
     @property
     def context_enabled(self) -> bool:
         return self.vector_store.count() > 0

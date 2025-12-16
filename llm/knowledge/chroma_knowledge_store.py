@@ -20,7 +20,7 @@ import numpy as np
 import chromadb
 from chromadb.config import Settings
 
-from knowledge.knowledge_store import KnowledgeStore
+from llm.knowledge.knowledge_store import KnowledgeStore
 from llm.document.document_loader import DocumentLoader
 from llm.document.embeddings import SentenceTransformerEmbeddingModel
 

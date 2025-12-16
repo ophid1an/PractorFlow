@@ -5,7 +5,7 @@ from llm.base.session import Session
 from llm.llm_config import LLMConfig
 from llm.transformers_runner import TransformersRunner
 from llm.llama_cpp_runner import LlamaCppRunner
-from knowledge.knowledge_store import KnowledgeStore
+from llm.knowledge.knowledge_store import KnowledgeStore
 
 
 def create_runner(

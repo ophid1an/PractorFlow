@@ -97,11 +97,10 @@ def main():
         question = "What is this document about?"
         print(f"Question: {question}")
         result4 = runner_with_session.generate(
-            prompt=question,
-            use_context=True
+            prompt=question
         )
         
-        print(f"Response: {result4['text']}")
+        print(f"Response: {result4['reply']}")
         if 'context_sources' in result4:
             print(f"\nSources used:")
             for src in result4['context_sources']:
@@ -132,12 +131,10 @@ def main():
             question2 = "Summarize the key points from this document."
             print(f"Question: {question2}")
             result5 = runner_with_session.generate(
-                prompt=question2,
-                use_context=True,
-                max_context_docs=5
+                prompt=question2
             )
             
-            print(f"Response: {result5['text']}")
+            print(f"Response: {result5['reply']}")
             if 'context_sources' in result5:
                 print(f"\nRetrieved {len(result5['context_sources'])} relevant chunks")
             print()
@@ -196,11 +193,10 @@ def main():
             question3 = "What are the main topics covered?"
             print(f"Question: {question3}")
             result6 = runner_with_session.generate(
-                prompt=question3,
-                use_context=True
+                prompt=question3
             )
             
-            print(f"Response: {result6['text']}")
+            print(f"Response: {result6['reply']}")
             if 'context_sources' in result6:
                 print(f"\nTop relevant chunks:")
                 for src in result6['context_sources'][:3]:

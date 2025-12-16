@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Optional
 from llm.llm_config import LLMConfig
 from llm.base.session import Session
 from llm.document.document_loader import DocumentLoader
-from knowledge.knowledge_store import KnowledgeStore
+from llm.knowledge.knowledge_store import KnowledgeStore
 
 
 class LLMRunner(ABC):
@@ -154,9 +154,6 @@ class LLMRunner(ABC):
         instructions: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
-        use_context: bool = True,
-        max_context_docs: Optional[int] = None,
-        max_context_chars: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Generate text from messages or prompt with optional document context.
 
@@ -166,14 +163,58 @@ class LLMRunner(ABC):
             instructions: System-level instructions/prompt
             temperature: Sampling temperature (uses config default if None)
             top_p: Nucleus sampling parameter (uses config default if None)
-            use_context: Whether to include document context (default: True)
-            max_context_docs: Maximum documents to include (default: None = unlimited)
-            max_context_chars: Maximum characters for context (default: None = unlimited)
 
         Returns:
-            Dictionary with keys: text, usage, latency_seconds, context_used (if context added)
+            Dictionary with keys:
+                - reply: Raw response from the model backend (structure depends on
+                         model's chat template, use get_chat_reply_structure() to understand it)
+                - latency_seconds: Generation time in seconds
+                - context_used: (optional) Context string if RAG was applied
+                - context_sources: (optional) List of source metadata if RAG was applied
             
         Note: Either messages or prompt must be provided, not both.
+        """
+        pass
+
+    @abstractmethod
+    def unload_document(self, document_id: str) -> bool:
+        """
+        Unload a document from temporary context.
+        
+        Removes the document's chunks from vector store and context store.
+        Use for documents loaded via load_document().
+        
+        Args:
+            document_id: Document ID to unload
+            
+        Returns:
+            True if document was found and unloaded, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def unload_document_from_knowledge(self, document_id: str) -> bool:
+        """
+        Unload a document from temporary context.
+        
+        Removes the document's chunks from vector store and context store.
+        Use for documents loaded via load_document_from_knowledge().
+        
+        Args:
+            document_id: Document ID to unload
+            
+        Returns:
+            True if document was found and unloaded, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    def get_chat_reply_structure(self) -> Optional[str]:
+        """Get the chat template that describes the structure of the reply field.
+        
+        Returns:
+            The chat template string from the model, or None if not available.
+            This helps users understand how to parse/interpret the reply content.
         """
         pass
 

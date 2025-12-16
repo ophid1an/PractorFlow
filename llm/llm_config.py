@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 import torch
 
 
@@ -28,6 +28,9 @@ class LLMConfig:
 
     # Backend
     backend: Optional[str] = "llama_cpp"
+
+    # Generation settings
+    stop_tokens: Optional[List[str]] = None
 
     # RAG / Retrieval settings
     max_retrieval_chunks: int = 10
