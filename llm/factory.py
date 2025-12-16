@@ -31,6 +31,8 @@ def create_runner(
 
     if backend == "llama_cpp":
         return LlamaCppRunner(config, session=session, knowledge_store=knowledge_store)
+    elif backend == "transformers":
+        return TransformersRunner(config, session=session, knowledge_store=knowledge_store)
     else:
         raise ValueError(
             f"Unsupported backend: {backend}. "

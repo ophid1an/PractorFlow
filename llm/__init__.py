@@ -1,3 +1,13 @@
+"""
+LLM module with tool-based RAG support.
+
+Provides:
+- LLM runners (llama.cpp, transformers)
+- Knowledge store for document storage
+- Tool registry for extensible tool support
+- Session management
+"""
+
 from llm.llm_config import LLMConfig
 from llm.base.llm_runner import LLMRunner
 from llm.base.session import Message, Session
@@ -12,6 +22,7 @@ __all__ = [
     "Message",
     "Session",
     "SessionStore",
+    "TransformersRunner",
     "LlamaCppRunner",
     "create_runner",
 ]
