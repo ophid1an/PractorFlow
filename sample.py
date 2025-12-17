@@ -88,6 +88,7 @@ async def main():
         print(f"User: {messages[-1]['content']}")
         result2 = await runner.generate(messages=messages)
         print(f"Assistant: {result2['reply']}")
+        print(f"Latency: {result2['latency_seconds']:.2f}s")
     print()
     
     # Example 3: Streaming generation (async)
@@ -127,7 +128,7 @@ async def main():
     print(f"Instructions: {instructions}")
     print(f"User: {messages[0]['content']}")
     print()
-    print("Streaming response: ", end="", flush=True)
+    print("Streaming response: ")
     
     async with pool.acquire_context(config) as handle:
         runner = create_runner(handle, knowledge_store=knowledge_store)
@@ -167,7 +168,8 @@ async def main():
             
             result = await runner.generate(prompt=question)
             
-            print(f"Response<{result['latency_seconds']:.2f}s>: {result['reply']}")
+            print(f"Response: {result['reply']}")
+            print(f"Latency: {result['latency_seconds']:.2f}s")
             if 'search_metadata' in result:
                 print(f"Documents used: {result['search_metadata'].get('document_ids', [])}")
         print()
@@ -187,7 +189,7 @@ async def main():
             search_result = runner.search(question)
             print(f"Search found {search_result.metadata.get('results_count', 0)} results")
             print()
-            print("Streaming response: ", end="", flush=True)
+            print("Streaming response: ")
             
             async for chunk in runner.generate_stream(prompt=question):
                 if not chunk.finished:

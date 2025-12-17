@@ -7,3 +7,4 @@ docling
 chardet
 sentence-transformers
 chromadb
+bitsandbytes

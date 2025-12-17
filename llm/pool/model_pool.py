@@ -173,7 +173,7 @@ class ModelPool:
             "n_ctx": config.n_ctx,
             "n_gpu_layers": config.n_gpu_layers,
             "embedding": False,
-            "verbose": True,
+            "verbose": False,
         }
 
         if config.n_batch is not None:
@@ -221,20 +221,36 @@ class ModelPool:
         }
 
         if config.dtype == "auto" or config.dtype is None:
-            model_kwargs["torch_dtype"] = "auto"
+            model_kwargs["dtype"] = "auto"
         else:
-            model_kwargs["torch_dtype"] = config.dtype
+            model_kwargs["dtype"] = config.dtype
 
         if config.device == "auto":
             model_kwargs["device_map"] = "auto"
         elif config.device != "cpu":
             model_kwargs["device_map"] = config.device
 
+        # Handle quantization using modern BitsAndBytesConfig
         if config.quantization:
-            if config.quantization == "4bit":
-                model_kwargs["load_in_4bit"] = True
-            elif config.quantization == "8bit":
-                model_kwargs["load_in_8bit"] = True
+            try:
+                from transformers import BitsAndBytesConfig
+
+                if config.quantization == "4bit":
+                    model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_use_double_quant=True,
+                        bnb_4bit_quant_type="nf4",
+                    )
+                elif config.quantization == "8bit":
+                    model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                        load_in_8bit=True,
+                    )
+                logger.info(f"[ModelPool] Using {config.quantization} quantization")
+            except ImportError:
+                logger.warning(
+                    "[ModelPool] bitsandbytes not available, skipping quantization"
+                )
 
         model = AutoModelForCausalLM.from_pretrained(config.model_name, **model_kwargs)
 
