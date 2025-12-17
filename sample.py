@@ -1,22 +1,23 @@
 """
-Sample usage of LLM module with tool-based RAG.
+Sample usage of LLM module with async support, model pooling, and RAG.
 
 Demonstrates:
-- Basic generation
+- Model pooling with async acquire/release
+- Async generation (non-blocking)
+- Async streaming generation
 - Messages API with chat history
 - Document management via KnowledgeStore
 - Knowledge search tool with scoped search
-- LLM generation with search context
 """
 
-from llm import LLMConfig, create_runner, Session
-from llm.knowledge import ChromaKnowledgeStore, ChromaKnowledgeStoreConfig
-import base64
-import io
+import asyncio
 import sys
 
+from llm import LLMConfig, ModelPool, create_runner
+from llm.knowledge import ChromaKnowledgeStore, ChromaKnowledgeStoreConfig
 
-def main():
+
+async def main():
     # Parse command line arguments
     document_file = None
     if len(sys.argv) > 1:
@@ -38,22 +39,28 @@ def main():
     print(f"Knowledge store: {knowledge_store.count_documents()} documents, {knowledge_store.count_chunks()} chunks")
     print()
     
-    # Create runner with knowledge store
-    runner = create_runner(config, knowledge_store=knowledge_store)
-    print("Model loaded successfully!")
+    # Initialize model pool
+    pool = ModelPool(max_models=1)
+    
+    # Preload model at startup
+    print("Preloading model...")
+    await pool.preload(config)
+    print("Model preloaded!")
     print()
     
-    # Example 1: Single prompt (backward compatibility)
+    # Example 1: Single prompt (async)
     print("=" * 60)
-    print("EXAMPLE 1: Single prompt")
+    print("EXAMPLE 1: Single prompt (async)")
     print("=" * 60)
     prompt = "What is Python in one sentence?"
     print(f"Prompt: {prompt}")
     print()
     
-    result = runner.generate(prompt=prompt)
-    print(f"Response: {result['reply']}")
-    print(f"Latency: {result['latency_seconds']:.2f}s")
+    async with pool.acquire_context(config) as handle:
+        runner = create_runner(handle, knowledge_store=knowledge_store)
+        result = await runner.generate(prompt=prompt)
+        print(f"Response: {result['reply']}")
+        print(f"Latency: {result['latency_seconds']:.2f}s")
     print()
     
     # Example 2: Messages API (chat history)
@@ -65,47 +72,84 @@ def main():
         {"role": "user", "content": "What are the main programming paradigms?"},
     ]
     
-    print(f"User: {messages[0]['content']}")
-    result1 = runner.generate(messages=messages)
-    print(f"Assistant: {result1['reply']}")
+    async with pool.acquire_context(config) as handle:
+        runner = create_runner(handle, knowledge_store=knowledge_store)
+        
+        print(f"User: {messages[0]['content']}")
+        result1 = await runner.generate(messages=messages)
+        print(f"Assistant: {result1['reply']}")
+        print()
+        
+        # Add assistant response to history
+        assistant_text = result1['reply']
+        if isinstance(assistant_text, dict) and 'choices' in assistant_text:
+            assistant_text = assistant_text['choices'][0]['message']['content']
+        messages.append({"role": "assistant", "content": assistant_text})
+        
+        # Continue conversation
+        messages.append({"role": "user", "content": "Which one is best for beginners?"})
+        print(f"User: {messages[-1]['content']}")
+        result2 = await runner.generate(messages=messages)
+        print(f"Assistant: {result2['reply']}")
     print()
     
-    # Add assistant response to history (extract text from llama.cpp response)
-    assistant_text = result1['reply']
-    if isinstance(assistant_text, dict) and 'choices' in assistant_text:
-        assistant_text = assistant_text['choices'][0]['message']['content']
-    messages.append({"role": "assistant", "content": assistant_text})
+    # Example 3: Streaming generation (async)
+    print("=" * 60)
+    print("EXAMPLE 3: Async streaming generation")
+    print("=" * 60)
     
-    # Continue conversation
-    messages.append({"role": "user", "content": "Which one is best for beginners?"})
-    print(f"User: {messages[-1]['content']}")
-    result2 = runner.generate(messages=messages)
-    print(f"Assistant: {result2['reply']}")
+    prompt = "Explain what a list comprehension is in Python."
+    print(f"Prompt: {prompt}")
+    print()
+    print("Streaming response: ", end="", flush=True)
+    
+    async with pool.acquire_context(config) as handle:
+        runner = create_runner(handle, knowledge_store=knowledge_store)
+        async for chunk in runner.generate_stream(prompt=prompt):
+            if not chunk.finished:
+                print(chunk.text, end="", flush=True)
+            else:
+                print()
+                print()
+                print(f"Finish reason: {chunk.finish_reason}")
+                print(f"Latency: {chunk.latency_seconds:.2f}s")
+                if chunk.usage:
+                    print(f"Usage: {chunk.usage}")
     print()
     
-    # Example 3: Messages with instructions
+    # Example 4: Streaming with instructions
     print("=" * 60)
-    print("EXAMPLE 3: Messages with system instructions")
+    print("EXAMPLE 4: Streaming with system instructions")
     print("=" * 60)
     
-    instructions = "You are a helpful Python tutor. Keep answers concise and beginner-friendly."
     messages = [
-        {"role": "user", "content": "How do I define a function in Python?"},
+        {"role": "user", "content": "What is recursion?"},
     ]
+    instructions = "You are a computer science teacher. Use simple examples."
     
     print(f"Instructions: {instructions}")
     print(f"User: {messages[0]['content']}")
-    result3 = runner.generate(messages=messages, instructions=instructions)
-    print(f"Assistant: {result3['reply']}")
+    print()
+    print("Streaming response: ", end="", flush=True)
+    
+    async with pool.acquire_context(config) as handle:
+        runner = create_runner(handle, knowledge_store=knowledge_store)
+        async for chunk in runner.generate_stream(messages=messages, instructions=instructions):
+            if not chunk.finished:
+                print(chunk.text, end="", flush=True)
+            else:
+                print()
+                print()
+                print(f"Finish reason: {chunk.finish_reason}")
+                print(f"Latency: {chunk.latency_seconds:.2f}s")
     print()
     
-    # Example 4: Document loading with RAG (if document provided)
+    # Example 5: RAG with document (if provided)
     if document_file:
         print("=" * 60)
-        print("EXAMPLE 4: Add document to knowledge store")
+        print("EXAMPLE 5: RAG with document")
         print("=" * 60)
         
-        # Add document to knowledge store
         print(f"Adding document: {document_file}")
         doc_info = knowledge_store.add_document_from_file(document_file)
         
@@ -114,133 +158,53 @@ def main():
         print(f"Context chunks: {doc_info['context_chunk_count']}")
         print()
         
-        # Set document scope for search
-        runner.set_document_scope({doc_info['id']})
-        
-        # Search and ask question
-        question = "What is this document about?"
-        print(f"Question: {question}")
-        
-        # Search for relevant content
-        search_result = runner.search(question)
-        print(f"Search found {search_result.metadata.get('results_count', 0)} results")
-        
-        # Generate with search context
-        result4 = runner.generate(prompt=question)
-        
-        print(f"Response<{result4['latency_seconds']:.2f}s>: {result4['reply']}")
-        if 'search_metadata' in result4:
-            print(f"\nDocuments used: {result4['search_metadata'].get('document_ids', [])}")
+        async with pool.acquire_context(config) as handle:
+            runner = create_runner(handle, knowledge_store=knowledge_store)
+            runner.set_document_scope({doc_info['id']})
+            
+            question = "What is this document about?"
+            print(f"Question: {question}")
+            
+            search_result = runner.search(question)
+            print(f"Search found {search_result.metadata.get('results_count', 0)} results")
+            
+            result = await runner.generate(prompt=question)
+            
+            print(f"Response<{result['latency_seconds']:.2f}s>: {result['reply']}")
+            if 'search_metadata' in result:
+                print(f"Documents used: {result['search_metadata'].get('document_ids', [])}")
         print()
         
-        # Example 5: Document loading from base64
+        # Example 6: Streaming with RAG
         print("=" * 60)
-        print("EXAMPLE 5: Document loading from base64")
-        print("=" * 60)
-        
-        try:
-            print(f"Converting {document_file} to base64...")
-            with open(document_file, "rb") as f:
-                file_bytes = f.read()
-                base64_data = base64.b64encode(file_bytes).decode('utf-8')
-            
-            print("Adding document from base64...")
-            doc_info2 = knowledge_store.add_document_from_base64(
-                base64_data=base64_data,
-                filename=f"base64_{document_file}"
-            )
-            
-            print(f"Document ID: {doc_info2['id']}")
-            print(f"Knowledge store now has {knowledge_store.count_chunks()} chunks")
-            print()
-            
-            # Ask another question with both documents in scope
-            runner.set_document_scope({doc_info['id'], doc_info2['id']})
-            
-            question2 = "Summarize the key points from this document."
-            print(f"Question: {question2}")
-            
-            runner.search(question2)
-            result5 = runner.generate(prompt=question2)
-            
-            print(f"Response<{result5['latency_seconds']:.2f}s>: {result5['reply']}")
-            if 'search_metadata' in result5:
-                print(f"\nResults count: {result5['search_metadata'].get('results_count', 0)}")
-            print()
-        except Exception as e:
-            print(f"Error loading from base64: {e}")
-            print()
-        
-        # Example 6: Document loading from data URI
-        print("=" * 60)
-        print("EXAMPLE 6: Document loading from data URI")
+        print("EXAMPLE 6: Async streaming with RAG context")
         print("=" * 60)
         
-        try:
-            print(f"Converting {document_file} to data URI...")
-            with open(document_file, "rb") as f:
-                file_bytes = f.read()
-                base64_encoded = base64.b64encode(file_bytes).decode('utf-8')
-                data_uri = f"data:application/octet-stream;base64,{base64_encoded}"
-            
-            print("Adding document from data URI...")
-            doc_info3 = knowledge_store.add_document_from_base64(
-                base64_data=data_uri,
-                filename=f"datauri_{document_file}"
-            )
-            
-            print(f"Document ID: {doc_info3['id']}")
-            print(f"Knowledge store now has {knowledge_store.count_chunks()} chunks")
-            print()
-        except Exception as e:
-            print(f"Error loading from data URI: {e}")
-            print()
+        question = "Summarize the key points from this document."
+        print(f"Question: {question}")
         
-        # Example 7: Document loading from stream (simulated FastAPI upload)
-        print("=" * 60)
-        print("EXAMPLE 7: Document loading from stream (simulated)")
-        print("=" * 60)
-        
-        try:
-            print(f"Simulating stream upload for {document_file}...")
+        async with pool.acquire_context(config) as handle:
+            runner = create_runner(handle, knowledge_store=knowledge_store)
+            runner.set_document_scope({doc_info['id']})
             
-            with open(document_file, "rb") as f:
-                file_bytes = f.read()
-                file_stream = io.BytesIO(file_bytes)
-            
-            print("Adding document from stream...")
-            doc_info4 = knowledge_store.add_document_from_stream(
-                file_stream=file_stream,
-                filename=f"stream_{document_file}",
-                mime_type="application/pdf"
-            )
-            
-            print(f"Document ID: {doc_info4['id']}")
-            print(f"Knowledge store now has {knowledge_store.count_chunks()} chunks")
+            search_result = runner.search(question)
+            print(f"Search found {search_result.metadata.get('results_count', 0)} results")
             print()
+            print("Streaming response: ", end="", flush=True)
             
-            # Query with all documents in scope
-            all_doc_ids = {doc['id'] for doc in knowledge_store.list_documents()}
-            runner.set_document_scope(all_doc_ids)
-            
-            question3 = "What are the main topics covered?"
-            print(f"Question: {question3}")
-            
-            runner.search(question3)
-            result6 = runner.generate(prompt=question3)
-            
-            print(f"Response<{result6['latency_seconds']:.2f}s>: {result6['reply']}")
-            if 'search_metadata' in result6:
-                print(f"\nDocuments referenced: {result6['search_metadata'].get('document_ids', [])}")
-            print()
-        except Exception as e:
-            print(f"Error loading from stream: {e}")
-            print()
+            async for chunk in runner.generate_stream(prompt=question):
+                if not chunk.finished:
+                    print(chunk.text, end="", flush=True)
+                else:
+                    print()
+                    print()
+                    print(f"Finish reason: {chunk.finish_reason}")
+                    print(f"Latency: {chunk.latency_seconds:.2f}s")
+                    if chunk.context_used:
+                        print(f"Context used: {len(chunk.context_used)} chars")
+        print()
         
-        # Clear document scope
-        runner.clear_document_scope()
-        
-        # Show knowledge store statistics
+        # Knowledge store stats
         print("=" * 60)
         print("KNOWLEDGE STORE STATISTICS")
         print("=" * 60)
@@ -248,47 +212,53 @@ def main():
         print(f"Documents: {stats['documents']}")
         print(f"Retrieval chunks: {stats['retrieval_chunks']}")
         print(f"Context chunks: {stats['context_chunks']}")
-        print(f"Embedding dimension: {stats['embedding_dimension']}")
         print()
-        
-        # List all documents
-        print("Documents in store:")
-        for doc in knowledge_store.list_documents():
-            print(f"  - {doc['filename']} (ID: {doc['id']})")
-        print()
-        
     else:
         print()
         print("=" * 60)
         print("INFO: No document file provided")
         print("=" * 60)
-        print("To test RAG with document loading, run:")
-        print("  python sample.py file.docx")
-        print("  python sample.py README.md")
-        print("  python sample.py document.pdf")
+        print("To test RAG, run: python sample.py <document_file>")
         print()
+    
+    # Pool stats
+    print("=" * 60)
+    print("MODEL POOL STATISTICS")
+    print("=" * 60)
+    pool_stats = pool.get_stats()
+    print(f"Max models: {pool_stats['max_models']}")
+    print(f"Loaded models: {pool_stats['loaded_models']}")
+    for model_info in pool_stats['models']:
+        print(f"  - {model_info['model_name']} (refs: {model_info['ref_count']})")
+    print()
     
     # Usage summary
     print("=" * 60)
     print("USAGE SUMMARY")
     print("=" * 60)
     print("""
-# Document Management (via KnowledgeStore):
-knowledge_store.add_document_from_file("path/to/file.pdf")
-knowledge_store.add_document_from_bytes(data, "file.pdf")
-knowledge_store.add_document_from_base64(base64_data, "file.pdf")
-knowledge_store.add_document_from_stream(stream, "file.pdf")  # FastAPI UploadFile
-knowledge_store.list_documents()
-knowledge_store.delete_document(doc_id)
+# Model Pool (async):
+pool = ModelPool(max_models=2)
+await pool.preload(config)
 
-# LLM with RAG (via Runner):
-runner = create_runner(config, knowledge_store=knowledge_store)
-runner.set_document_scope({doc_id1, doc_id2})  # Scope search to specific docs
-runner.search("your query")                     # Search knowledge base
-runner.generate(prompt="your question")         # Generate with search context
-runner.clear_document_scope()                   # Search all documents
+async with pool.acquire_context(config) as handle:
+    runner = create_runner(handle, knowledge_store)
+    result = await runner.generate(prompt="Hello")
+
+# Async Streaming:
+async for chunk in runner.generate_stream(prompt="Hello"):
+    if not chunk.finished:
+        print(chunk.text, end="")
+
+# RAG:
+runner.set_document_scope({doc_id})
+runner.search("query")
+result = await runner.generate(prompt="question")
 """)
+
+    # Cleanup
+    await pool.unload_all()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -1,24 +1,21 @@
 from typing import Optional
 
 from llm.base.llm_runner import LLMRunner
-from llm.base.session import Session
-from llm.llm_config import LLMConfig
+from llm.pool.model_handle import ModelHandle
 from llm.transformers_runner import TransformersRunner
 from llm.llama_cpp_runner import LlamaCppRunner
 from llm.knowledge.knowledge_store import KnowledgeStore
 
 
 def create_runner(
-    config: LLMConfig, 
-    session: Optional[Session] = None,
+    handle: ModelHandle,
     knowledge_store: Optional[KnowledgeStore] = None
 ) -> LLMRunner:
     """
-    Factory function to create appropriate model runner.
+    Factory function to create appropriate model runner from a pooled model handle.
 
     Args:
-        config: LLMConfig instance with model parameters
-        session: Optional Session object for conversation management
+        handle: ModelHandle from ModelPool with loaded model
         knowledge_store: Optional KnowledgeStore for document search
 
     Returns:
@@ -27,12 +24,12 @@ def create_runner(
     Raises:
         ValueError: If backend is not supported
     """
-    backend = config.backend
+    backend = handle.backend
 
     if backend == "llama_cpp":
-        return LlamaCppRunner(config, session=session, knowledge_store=knowledge_store)
+        return LlamaCppRunner(handle, knowledge_store=knowledge_store)
     elif backend == "transformers":
-        return TransformersRunner(config, session=session, knowledge_store=knowledge_store)
+        return TransformersRunner(handle, knowledge_store=knowledge_store)
     else:
         raise ValueError(
             f"Unsupported backend: {backend}. "

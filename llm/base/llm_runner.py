@@ -1,38 +1,52 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Set
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Set, AsyncIterator
 
 from llm.llm_config import LLMConfig
-from llm.base.session import Session
+from llm.pool.model_handle import ModelHandle
 from llm.knowledge.knowledge_store import KnowledgeStore
 from llm.tools.tool_registry import ToolRegistry
 from llm.tools.base import ToolResult
 
 
+@dataclass
+class StreamChunk:
+    """Represents a chunk of streamed response."""
+    text: str
+    finished: bool = False
+    finish_reason: Optional[str] = None
+    latency_seconds: Optional[float] = None
+    usage: Optional[Dict[str, int]] = None
+    context_used: Optional[str] = None
+    search_metadata: Optional[Dict[str, Any]] = None
+
+
 class LLMRunner(ABC):
-    """Abstract base class for LLM runners with tool support."""
+    """Abstract base class for LLM runners with async support."""
 
     def __init__(
         self,
-        config: LLMConfig,
-        session: Optional[Session] = None,
+        handle: ModelHandle,
         knowledge_store: Optional[KnowledgeStore] = None
     ):
         """
         Initialize LLM runner.
         
         Args:
-            config: LLM configuration
-            session: Optional Session object for conversation management
+            handle: ModelHandle from ModelPool with loaded model
             knowledge_store: Optional KnowledgeStore for document search
         """
-        self.config = config
-        self.model_name = config.model_name
-        self.device = config.device
-        self.dtype = config.dtype
-        self.max_new_tokens = config.max_new_tokens
+        self.handle = handle
+        self.config = handle.config
+        self.model_name = handle.config.model_name
+        self.device = handle.config.device
+        self.dtype = handle.config.dtype
+        self.max_new_tokens = handle.config.max_new_tokens
+        self.max_context_length = handle.max_context_length
         
-        # Session management
-        self.session = session
+        # Direct model access
+        self.model = handle.model
+        self.tokenizer = handle.tokenizer  # None for llama.cpp
         
         # Knowledge store
         self.knowledge_store = knowledge_store
@@ -42,6 +56,15 @@ class LLMRunner(ABC):
         
         # Pending context from tool execution
         self._pending_context: Optional[str] = None
+        
+        # Register knowledge search tool if knowledge store is available
+        if self.knowledge_store:
+            from llm.tools.knowledge_search import KnowledgeSearchTool
+            knowledge_tool = KnowledgeSearchTool(
+                knowledge_store=self.knowledge_store,
+                default_top_k=self.config.max_search_results
+            )
+            self.tool_registry.register(knowledge_tool)
 
     def set_document_scope(self, document_ids: Optional[Set[str]]) -> None:
         """
@@ -103,7 +126,7 @@ class LLMRunner(ABC):
         return self._pending_context is not None
 
     @abstractmethod
-    def generate(
+    async def generate(
         self,
         *,
         messages: Optional[List[Dict[str, str]]] = None,
@@ -114,6 +137,9 @@ class LLMRunner(ABC):
     ) -> Dict[str, Any]:
         """
         Generate text from messages or prompt with optional context.
+        
+        This is an async method that runs inference in a thread pool
+        to avoid blocking the event loop.
         
         If search() was called before generate(), the search results
         are automatically included as context.
@@ -137,6 +163,51 @@ class LLMRunner(ABC):
         pass
 
     @abstractmethod
+    async def generate_stream(
+        self,
+        *,
+        messages: Optional[List[Dict[str, str]]] = None,
+        prompt: Optional[str] = None,
+        instructions: Optional[str] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Generate text with streaming output.
+        
+        This is an async generator that yields chunks as they are generated.
+        The underlying inference runs in a thread pool to avoid blocking.
+        
+        The final chunk will have finished=True and include timing/usage metadata.
+        
+        If search() was called before generate_stream(), the search results
+        are automatically included as context.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            prompt: Single prompt string (alternative to messages)
+            instructions: System-level instructions/prompt
+            temperature: Sampling temperature (uses config default if None)
+            top_p: Nucleus sampling parameter (uses config default if None)
+
+        Yields:
+            StreamChunk objects containing:
+                - text: New text fragment (delta)
+                - finished: Whether generation is complete
+                - finish_reason: Why generation stopped (on final chunk)
+                - latency_seconds: Total time (on final chunk)
+                - usage: Token counts (on final chunk, if available)
+                - context_used: Context string (on final chunk, if search was used)
+                - search_metadata: Search metadata (on final chunk, if available)
+            
+        Note: Either messages or prompt must be provided, not both.
+        """
+        pass
+        # This is needed to make it a valid async generator signature
+        # Actual implementations will use 'yield'
+        if False:
+            yield StreamChunk(text="")
+
     def get_chat_reply_structure(self) -> Optional[str]:
         """
         Get the chat template that describes the structure of the reply field.
@@ -144,7 +215,7 @@ class LLMRunner(ABC):
         Returns:
             The chat template string from the model, or None if not available.
         """
-        pass
+        return self.handle.get_chat_template()
 
     def _get_temperature(self, temperature: float = None) -> float:
         """Get temperature value, falling back to config default."""

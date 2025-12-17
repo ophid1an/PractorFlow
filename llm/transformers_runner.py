@@ -1,215 +1,37 @@
+import asyncio
 import time
-import os
-from typing import Dict, Any, Optional, List
+from threading import Thread
+from typing import Dict, Any, Optional, List, AsyncIterator
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import TextIteratorStreamer
 
-from llm.llm_config import LLMConfig
-from llm.base.llm_runner import LLMRunner
-from llm.base.session import Session
+from llm.base.llm_runner import LLMRunner, StreamChunk
+from llm.pool.model_handle import ModelHandle
 from llm.knowledge.knowledge_store import KnowledgeStore
-from llm.tools.knowledge_search import KnowledgeSearchTool
 
 
 class TransformersRunner(LLMRunner):
-    """
-    Runner for HuggingFace Transformers models with tool-based RAG.
-    
-    Supports models like:
-    - OpenAI GPT-OSS (openai/gpt-oss-20b, openai/gpt-oss-120b)
-    - Qwen2 Instruct models
-    - Llama models
-    - And other AutoModelForCausalLM compatible models
-    """
+    """Async runner for HuggingFace Transformers models."""
 
     def __init__(
         self,
-        config: LLMConfig,
-        session: Optional[Session] = None,
+        handle: ModelHandle,
         knowledge_store: Optional[KnowledgeStore] = None
     ):
-        super().__init__(config, session, knowledge_store)
+        if not handle.is_transformers:
+            raise ValueError(f"Expected transformers handle, got {handle.backend}")
         
-        os.makedirs(config.models_dir, exist_ok=True)
-
-        print(f"[TransformersRunner] Loading model: {self.model_name}")
-
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name,
-            cache_dir=config.models_dir,
-            trust_remote_code=True,
-        )
+        super().__init__(handle, knowledge_store)
         
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # Build model loading kwargs
-        model_kwargs = {
-            "cache_dir": config.models_dir,
-            "trust_remote_code": True,
-        }
-        
-        # Handle dtype - use "auto" for models like GPT-OSS that have specific requirements
-        if config.dtype == "auto" or config.dtype is None:
-            model_kwargs["torch_dtype"] = "auto"
-        else:
-            model_kwargs["torch_dtype"] = config.dtype
-        
-        # Handle device mapping
-        if config.device == "auto":
-            model_kwargs["device_map"] = "auto"
-        elif config.device != "cpu":
-            model_kwargs["device_map"] = config.device
-        
-        # Handle quantization
-        if config.quantization:
-            if config.quantization == "4bit":
-                model_kwargs["load_in_4bit"] = True
-            elif config.quantization == "8bit":
-                model_kwargs["load_in_8bit"] = True
-
-        # Load model
-        print(f"[TransformersRunner] Loading with kwargs: {model_kwargs}")
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            **model_kwargs
-        )
-        
-        # Move to device if not using device_map
-        if "device_map" not in model_kwargs and config.device == "cpu":
-            self.model = self.model.to(config.device)
-        
-        self.model.eval()
-        
-        # Determine actual device
+        # Determine device
         if hasattr(self.model, 'device'):
             self._device = self.model.device
         else:
             self._device = next(self.model.parameters()).device
-
-        # Get context length
-        if hasattr(self.model.config, "max_position_embeddings"):
-            self.max_context_length = self.model.config.max_position_embeddings
-            print(f"[TransformersRunner] Context window: {self.max_context_length}")
-        else:
-            self.max_context_length = config.n_ctx
-            print(f"[TransformersRunner] Context window (from config): {self.max_context_length}")
-
-        print(f"[TransformersRunner] Model loaded on {self._device}")
         
-        # Register knowledge search tool if knowledge store is available
-        if self.knowledge_store:
-            knowledge_tool = KnowledgeSearchTool(
-                knowledge_store=self.knowledge_store,
-                default_top_k=config.max_search_results
-            )
-            self.tool_registry.register(knowledge_tool)
-            print("[TransformersRunner] Knowledge search tool registered")
-
-    def get_chat_reply_structure(self) -> Optional[str]:
-        """Get the chat template from tokenizer."""
-        try:
-            if hasattr(self.tokenizer, 'chat_template'):
-                return self.tokenizer.chat_template
-        except Exception:
-            pass
-        return None
-
-    def generate(
-        self,
-        *,
-        messages: Optional[List[Dict[str, str]]] = None,
-        prompt: Optional[str] = None,
-        instructions: Optional[str] = None,
-        temperature: float = None,
-        top_p: float = None,
-    ) -> Dict[str, Any]:
-        """Generate with optional context from prior search() call."""
-        start_time = time.time()
-
-        # Get pending context from search tool
-        context = self._consume_pending_context()
-        context_metadata = None
-        
-        if context:
-            last_result = self.tool_registry.get_last_result()
-            if last_result and last_result.metadata:
-                context_metadata = last_result.metadata
-            self.tool_registry.clear_last_result()
-            
-            print(f"[TransformersRunner] Using search context ({len(context)} chars)")
-
-        # Build chat messages
-        chat_messages = self._build_chat_messages(messages, prompt, instructions, context)
-
-        temp = self._get_temperature(temperature)
-        tp = self._get_top_p(top_p)
-
-        print("[TransformersRunner] Generating...")
-        
-        # Apply chat template if available
-        if hasattr(self.tokenizer, 'apply_chat_template'):
-            input_text = self.tokenizer.apply_chat_template(
-                chat_messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-        else:
-            input_text = self._format_messages_fallback(chat_messages)
-        
-        # Tokenize
-        inputs = self.tokenizer(
-            input_text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.max_context_length - self.max_new_tokens if self.max_context_length else None
-        ).to(self._device)
-        
-        input_length = inputs['input_ids'].shape[1]
-        
-        # Build generation kwargs
-        gen_kwargs = {
-            "max_new_tokens": self.max_new_tokens,
-            "do_sample": temp > 0,
-            "pad_token_id": self.tokenizer.pad_token_id,
-            "eos_token_id": self.tokenizer.eos_token_id,
-        }
-        
-        if temp > 0:
-            gen_kwargs["temperature"] = temp
-            gen_kwargs["top_p"] = tp
-        
-        # Generate
-        with torch.inference_mode():
-            outputs = self.model.generate(
-                **inputs,
-                **gen_kwargs
-            )
-        
-        # Decode response (only new tokens)
-        generated_tokens = outputs[0][input_length:]
-        response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-
-        latency = time.time() - start_time
-
-        response = {
-            "reply": response_text,
-            "latency_seconds": latency,
-            "usage": {
-                "prompt_tokens": input_length,
-                "completion_tokens": len(generated_tokens),
-                "total_tokens": input_length + len(generated_tokens),
-            }
-        }
-        
-        if context:
-            response["context_used"] = context
-            if context_metadata:
-                response["search_metadata"] = context_metadata
-        
-        return response
+        print(f"[TransformersRunner] Initialized with pooled model: {self.model_name}")
+        print(f"[TransformersRunner] Device: {self._device}")
 
     def _build_chat_messages(
         self,
@@ -225,8 +47,6 @@ class TransformersRunner(LLMRunner):
             raise ValueError("Must provide either messages or prompt")
         
         chat_messages = []
-        
-        # Build system message
         system_parts = []
         
         if instructions:
@@ -247,7 +67,6 @@ class TransformersRunner(LLMRunner):
                 "content": "\n\n".join(system_parts)
             })
         
-        # Add conversation messages
         if messages is not None:
             for msg in messages:
                 chat_messages.append({
@@ -276,3 +95,232 @@ class TransformersRunner(LLMRunner):
                 parts.append(f"Assistant: {content}")
         parts.append("Assistant:")
         return "\n\n".join(parts)
+
+    def _prepare_inputs(
+        self,
+        messages: Optional[List[Dict[str, str]]] = None,
+        prompt: Optional[str] = None,
+        instructions: Optional[str] = None,
+        context: Optional[str] = None,
+    ) -> tuple:
+        """Prepare tokenized inputs for generation."""
+        chat_messages = self._build_chat_messages(messages, prompt, instructions, context)
+        
+        if hasattr(self.tokenizer, 'apply_chat_template'):
+            input_text = self.tokenizer.apply_chat_template(
+                chat_messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+        else:
+            input_text = self._format_messages_fallback(chat_messages)
+        
+        inputs = self.tokenizer(
+            input_text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_context_length - self.max_new_tokens if self.max_context_length else None
+        ).to(self._device)
+        
+        input_length = inputs['input_ids'].shape[1]
+        
+        return inputs, input_length
+
+    def _generate_sync(
+        self,
+        inputs: Dict[str, torch.Tensor],
+        input_length: int,
+        temperature: float,
+        top_p: float,
+    ) -> tuple:
+        """Synchronous generation - runs in thread pool."""
+        gen_kwargs = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": temperature > 0,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+        }
+        
+        if temperature > 0:
+            gen_kwargs["temperature"] = temperature
+            gen_kwargs["top_p"] = top_p
+        
+        with torch.inference_mode():
+            outputs = self.model.generate(**inputs, **gen_kwargs)
+        
+        generated_tokens = outputs[0][input_length:]
+        response_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        
+        return response_text, len(generated_tokens)
+
+    async def generate(
+        self,
+        *,
+        messages: Optional[List[Dict[str, str]]] = None,
+        prompt: Optional[str] = None,
+        instructions: Optional[str] = None,
+        temperature: float = None,
+        top_p: float = None,
+    ) -> Dict[str, Any]:
+        """Async generate with optional context from prior search() call."""
+        start_time = time.time()
+
+        context = self._consume_pending_context()
+        context_metadata = None
+        
+        if context:
+            last_result = self.tool_registry.get_last_result()
+            if last_result and last_result.metadata:
+                context_metadata = last_result.metadata
+            self.tool_registry.clear_last_result()
+            print(f"[TransformersRunner] Using search context ({len(context)} chars)")
+
+        temp = self._get_temperature(temperature)
+        tp = self._get_top_p(top_p)
+
+        print("[TransformersRunner] Generating (async)...")
+        
+        inputs, input_length = self._prepare_inputs(messages, prompt, instructions, context)
+        
+        # Run blocking inference in thread pool
+        loop = asyncio.get_event_loop()
+        response_text, completion_tokens = await loop.run_in_executor(
+            None,
+            self._generate_sync,
+            inputs,
+            input_length,
+            temp,
+            tp
+        )
+
+        latency = time.time() - start_time
+
+        response = {
+            "reply": response_text,
+            "latency_seconds": latency,
+            "usage": {
+                "prompt_tokens": input_length,
+                "completion_tokens": completion_tokens,
+                "total_tokens": input_length + completion_tokens,
+            }
+        }
+        
+        if context:
+            response["context_used"] = context
+            if context_metadata:
+                response["search_metadata"] = context_metadata
+        
+        return response
+
+    async def generate_stream(
+        self,
+        *,
+        messages: Optional[List[Dict[str, str]]] = None,
+        prompt: Optional[str] = None,
+        instructions: Optional[str] = None,
+        temperature: float = None,
+        top_p: float = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """Async streaming generation using TextIteratorStreamer."""
+        start_time = time.time()
+
+        context = self._consume_pending_context()
+        context_metadata = None
+        
+        if context:
+            last_result = self.tool_registry.get_last_result()
+            if last_result and last_result.metadata:
+                context_metadata = last_result.metadata
+            self.tool_registry.clear_last_result()
+            print(f"[TransformersRunner] Using search context ({len(context)} chars)")
+
+        temp = self._get_temperature(temperature)
+        tp = self._get_top_p(top_p)
+
+        print("[TransformersRunner] Generating (async streaming)...")
+        
+        inputs, input_length = self._prepare_inputs(messages, prompt, instructions, context)
+        
+        # Create async queue to bridge sync streamer to async
+        queue: asyncio.Queue[Optional[StreamChunk]] = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+        
+        # Create streamer
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True
+        )
+        
+        def stream_in_thread():
+            """Run streaming generation in thread, put chunks in queue."""
+            try:
+                gen_kwargs = {
+                    **inputs,
+                    "max_new_tokens": self.max_new_tokens,
+                    "do_sample": temp > 0,
+                    "pad_token_id": self.tokenizer.pad_token_id,
+                    "eos_token_id": self.tokenizer.eos_token_id,
+                    "streamer": streamer,
+                }
+                
+                if temp > 0:
+                    gen_kwargs["temperature"] = temp
+                    gen_kwargs["top_p"] = tp
+                
+                generated_token_count = 0
+                
+                # Start generation in background thread
+                def generate_thread():
+                    with torch.inference_mode():
+                        self.model.generate(**gen_kwargs)
+                
+                gen_thread = Thread(target=generate_thread)
+                gen_thread.start()
+                
+                # Iterate streamer and put chunks in queue
+                for text in streamer:
+                    if text:
+                        generated_token_count += len(self.tokenizer.encode(text, add_special_tokens=False))
+                        chunk = StreamChunk(text=text, finished=False)
+                        asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+                
+                gen_thread.join()
+                
+                # Put final chunk
+                latency = time.time() - start_time
+                final_chunk = StreamChunk(
+                    text="",
+                    finished=True,
+                    finish_reason="stop",
+                    latency_seconds=latency,
+                    usage={
+                        "prompt_tokens": input_length,
+                        "completion_tokens": generated_token_count,
+                        "total_tokens": input_length + generated_token_count,
+                    },
+                    context_used=context,
+                    search_metadata=context_metadata
+                )
+                asyncio.run_coroutine_threadsafe(queue.put(final_chunk), loop).result()
+                
+            except Exception as e:
+                error_chunk = StreamChunk(
+                    text="",
+                    finished=True,
+                    finish_reason=f"error: {str(e)}"
+                )
+                asyncio.run_coroutine_threadsafe(queue.put(error_chunk), loop).result()
+            finally:
+                # Signal end of stream
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+        
+        # Start streaming in thread
+        loop.run_in_executor(None, stream_in_thread)
+        
+        # Yield chunks from queue
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            yield chunk
