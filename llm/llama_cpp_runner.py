@@ -5,21 +5,27 @@ from typing import Dict, Any, Optional, List, AsyncIterator
 from llm.base.llm_runner import LLMRunner, StreamChunk
 from llm.pool.model_handle import ModelHandle
 from llm.knowledge.knowledge_store import KnowledgeStore
+from logger.logger import get_logger
+from settings.app_settings import appConfiguration
+
+logger = get_logger(
+    "llama_cpp_runner", level=appConfiguration.LoggerConfiguration.RunnerLevel
+)
 
 
 class LlamaCppRunner(LLMRunner):
     """Async runner for GGUF models using llama-cpp-python."""
 
     def __init__(
-        self,
-        handle: ModelHandle,
-        knowledge_store: Optional[KnowledgeStore] = None
+        self, handle: ModelHandle, knowledge_store: Optional[KnowledgeStore] = None
     ):
         if not handle.is_llama_cpp:
             raise ValueError(f"Expected llama_cpp handle, got {handle.backend}")
-        
+
         super().__init__(handle, knowledge_store)
-        print(f"[LlamaCppRunner] Initialized with pooled model: {self.model_name}")
+        logger.info(
+            f"[LlamaCppRunner] Initialized with pooled model: {self.model_name}"
+        )
 
     def _build_chat_messages(
         self,
@@ -33,13 +39,13 @@ class LlamaCppRunner(LLMRunner):
             raise ValueError("Cannot provide both messages and prompt")
         if messages is None and prompt is None:
             raise ValueError("Must provide either messages or prompt")
-        
+
         chat_messages = []
         system_parts = []
-        
+
         if instructions:
             system_parts.append(instructions)
-        
+
         if context:
             context_instruction = (
                 "You have been provided with relevant information from documents below. "
@@ -47,26 +53,21 @@ class LlamaCppRunner(LLMRunner):
                 "Reference specific details from the context when relevant."
             )
             system_parts.append(context_instruction)
-            system_parts.append(f"\n=== DOCUMENT CONTEXT ===\n{context}\n=== END CONTEXT ===\n")
-        
+            system_parts.append(
+                f"\n=== DOCUMENT CONTEXT ===\n{context}\n=== END CONTEXT ===\n"
+            )
+
         if system_parts:
-            chat_messages.append({
-                "role": "system",
-                "content": "\n\n".join(system_parts)
-            })
-        
+            chat_messages.append(
+                {"role": "system", "content": "\n\n".join(system_parts)}
+            )
+
         if messages is not None:
             for msg in messages:
-                chat_messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
+                chat_messages.append({"role": msg["role"], "content": msg["content"]})
         else:
-            chat_messages.append({
-                "role": "user",
-                "content": prompt
-            })
-        
+            chat_messages.append({"role": "user", "content": prompt})
+
         return chat_messages
 
     def _generate_sync(
@@ -82,10 +83,10 @@ class LlamaCppRunner(LLMRunner):
             "top_p": top_p,
             "max_tokens": self.max_new_tokens,
         }
-        
+
         if self.config.stop_tokens:
             completion_kwargs["stop"] = self.config.stop_tokens
-        
+
         return self.model.create_chat_completion(**completion_kwargs)
 
     async def generate(
@@ -102,29 +103,27 @@ class LlamaCppRunner(LLMRunner):
 
         context = self._consume_pending_context()
         context_metadata = None
-        
+
         if context:
             last_result = self.tool_registry.get_last_result()
             if last_result and last_result.metadata:
                 context_metadata = last_result.metadata
             self.tool_registry.clear_last_result()
-            print(f"[LlamaCppRunner] Using search context ({len(context)} chars)")
+            logger.info(f"[LlamaCppRunner] Using search context ({len(context)} chars)")
 
-        chat_messages = self._build_chat_messages(messages, prompt, instructions, context)
+        chat_messages = self._build_chat_messages(
+            messages, prompt, instructions, context
+        )
 
         temp = self._get_temperature(temperature)
         tp = self._get_top_p(top_p)
 
-        print("[LlamaCppRunner] Generating (async)...")
-        
+        logger.info("[LlamaCppRunner] Generating (async)...")
+
         # Run blocking inference in thread pool
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None,
-            self._generate_sync,
-            chat_messages,
-            temp,
-            tp
+            None, self._generate_sync, chat_messages, temp, tp
         )
 
         latency = time.time() - start_time
@@ -133,12 +132,12 @@ class LlamaCppRunner(LLMRunner):
             "reply": result,
             "latency_seconds": latency,
         }
-        
+
         if context:
             response["context_used"] = context
             if context_metadata:
                 response["search_metadata"] = context_metadata
-        
+
         return response
 
     async def generate_stream(
@@ -155,24 +154,26 @@ class LlamaCppRunner(LLMRunner):
 
         context = self._consume_pending_context()
         context_metadata = None
-        
+
         if context:
             last_result = self.tool_registry.get_last_result()
             if last_result and last_result.metadata:
                 context_metadata = last_result.metadata
             self.tool_registry.clear_last_result()
-            print(f"[LlamaCppRunner] Using search context ({len(context)} chars)")
+            logger.info(f"[LlamaCppRunner] Using search context ({len(context)} chars)")
 
-        chat_messages = self._build_chat_messages(messages, prompt, instructions, context)
+        chat_messages = self._build_chat_messages(
+            messages, prompt, instructions, context
+        )
 
         temp = self._get_temperature(temperature)
         tp = self._get_top_p(top_p)
 
-        print("[LlamaCppRunner] Generating (async streaming)...")
-        
+        logger.info("[LlamaCppRunner] Generating (async streaming)...")
+
         # Create async queue to bridge sync generator to async
         queue: asyncio.Queue[Optional[StreamChunk]] = asyncio.Queue()
-        
+
         def stream_in_thread():
             """Run streaming generation in thread, put chunks in queue."""
             try:
@@ -183,32 +184,31 @@ class LlamaCppRunner(LLMRunner):
                     "max_tokens": self.max_new_tokens,
                     "stream": True,
                 }
-                
+
                 if self.config.stop_tokens:
                     completion_kwargs["stop"] = self.config.stop_tokens
-                
+
                 finish_reason = None
-                
+
                 for chunk in self.model.create_chat_completion(**completion_kwargs):
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
-                    
+
                     choice = choices[0]
                     delta = choice.get("delta", {})
                     content = delta.get("content", "")
-                    
+
                     chunk_finish_reason = choice.get("finish_reason")
                     if chunk_finish_reason:
                         finish_reason = chunk_finish_reason
-                    
+
                     if content:
                         # Put chunk in queue (blocking call from thread)
                         asyncio.run_coroutine_threadsafe(
-                            queue.put(StreamChunk(text=content, finished=False)),
-                            loop
+                            queue.put(StreamChunk(text=content, finished=False)), loop
                         ).result()
-                
+
                 # Put final chunk
                 latency = time.time() - start_time
                 final_chunk = StreamChunk(
@@ -217,26 +217,24 @@ class LlamaCppRunner(LLMRunner):
                     finish_reason=finish_reason,
                     latency_seconds=latency,
                     context_used=context,
-                    search_metadata=context_metadata
+                    search_metadata=context_metadata,
                 )
                 asyncio.run_coroutine_threadsafe(queue.put(final_chunk), loop).result()
-                
+
             except Exception as e:
                 # Put error chunk
                 error_chunk = StreamChunk(
-                    text="",
-                    finished=True,
-                    finish_reason=f"error: {str(e)}"
+                    text="", finished=True, finish_reason=f"error: {str(e)}"
                 )
                 asyncio.run_coroutine_threadsafe(queue.put(error_chunk), loop).result()
             finally:
                 # Signal end of stream
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
-        
+
         # Start generation in thread
         loop = asyncio.get_event_loop()
         loop.run_in_executor(None, stream_in_thread)
-        
+
         # Yield chunks from queue
         while True:
             chunk = await queue.get()

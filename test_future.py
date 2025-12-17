@@ -24,7 +24,7 @@ async def main():
         document_file = sys.argv[1]
     
     config = appConfiguration.ModelConfiguration
-    
+    config.model_name="Qwen/Qwen3-VL-8B-Instruct-GGUF/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
     print(f"Loading model: {config.model_name}")
     print(f"Backend: {config.backend}")
     print(f"Device: {config.device}")

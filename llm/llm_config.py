@@ -14,6 +14,7 @@ class LLMConfig:
     """
 
     # Model settings
+    # model_name: str = "bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
     model_name: str = "Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf"
     device: str = "auto"  # "auto", "cuda", "cpu", or specific device
     dtype: Union[torch.dtype, str, None] = "auto"  # torch.dtype, "auto", or None
@@ -25,7 +26,6 @@ class LLMConfig:
     quantization: Optional[str] = None  # "4bit", "8bit", or None
 
     # Paths
-    local_model_path: Optional[str] = None
     models_dir: str = "./models"
 
     # Llama.cpp specific settings

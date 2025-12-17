@@ -12,10 +12,3 @@ docling
 chardet
 sentence-transformers
 chromadb
-
-# Additional for vision models
-pillow
-numpy
-
-# Optional: For downloading models
-huggingface-hub

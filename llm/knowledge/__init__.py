@@ -5,7 +5,8 @@ Provides persistent document storage with vector search capabilities.
 """
 
 from llm.knowledge.knowledge_store import KnowledgeStore
-from llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore, ChromaKnowledgeStoreConfig
+from llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore
+from llm.knowledge.chroma_knowledge_config import ChromaKnowledgeStoreConfig
 
 __all__ = [
     "KnowledgeStore",
