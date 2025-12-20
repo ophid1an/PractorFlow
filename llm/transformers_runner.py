@@ -39,6 +39,63 @@ class TransformersRunner(LLMRunner):
         )
         logger.info(f"[TransformersRunner] Device: {self._device}")
 
+    def supports_function_calling(self) -> bool:
+        """
+        Check if the transformers model supports native function calling.
+        
+        Inspects the tokenizer's chat template and model configuration
+        to determine if it has built-in support for function/tool calling.
+        
+        Returns:
+            True if model supports native function calling, False otherwise
+        """
+        try:
+            # Check tokenizer chat template
+            if self.tokenizer and hasattr(self.tokenizer, 'chat_template'):
+                chat_template = self.tokenizer.chat_template
+                if chat_template:
+                    template_lower = str(chat_template).lower()
+                    # Look for tool/function related tokens in the template
+                    if any(keyword in template_lower for keyword in [
+                        'tool', 'function', '<tool_call>', '<function_call>',
+                        'tools', 'functions', 'tool_use', 'function_use'
+                    ]):
+                        logger.info(f"[TransformersRunner] Model supports function calling (detected in chat template)")
+                        return True
+            
+            # Check model configuration for capability flags
+            if hasattr(self.model, 'config'):
+                config = self.model.config
+                
+                # Check if config has a to_dict method
+                if hasattr(config, 'to_dict'):
+                    config_dict = config.to_dict()
+                    
+                    # Check for explicit capability flags
+                    if config_dict.get('supports_function_calling', False):
+                        logger.info(f"[TransformersRunner] Model supports function calling (config flag)")
+                        return True
+                    
+                    # Check for tool-related configuration keys
+                    for key in config_dict.keys():
+                        key_lower = key.lower()
+                        if 'tool' in key_lower or 'function' in key_lower:
+                            logger.info(f"[TransformersRunner] Model supports function calling (detected in config: {key})")
+                            return True
+                
+                # Check for model_type that commonly support function calling
+                if hasattr(config, 'model_type'):
+                    model_type = config.model_type.lower() if config.model_type else ""
+                    # Note: This is intentionally conservative - we don't assume support based on model type alone
+                    # Models should explicitly indicate support via template or config
+            
+            logger.info(f"[TransformersRunner] Model does NOT support native function calling")
+            return False
+            
+        except Exception as e:
+            logger.warning(f"[TransformersRunner] Error detecting function calling support: {e}")
+            return False
+
     def _build_chat_messages(
         self,
         messages: Optional[List[Dict[str, str]]] = None,

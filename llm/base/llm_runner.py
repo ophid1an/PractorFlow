@@ -126,6 +126,20 @@ class LLMRunner(ABC):
         return self._pending_context is not None
 
     @abstractmethod
+    def supports_function_calling(self) -> bool:
+        """
+        Check if the model supports native function calling.
+        
+        This method should inspect the model's metadata, chat template,
+        or configuration to determine if it has built-in support for
+        function/tool calling.
+        
+        Returns:
+            True if model supports native function calling, False otherwise
+        """
+        pass
+
+    @abstractmethod
     async def generate(
         self,
         *,

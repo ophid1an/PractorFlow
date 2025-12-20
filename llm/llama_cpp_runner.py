@@ -27,6 +27,46 @@ class LlamaCppRunner(LLMRunner):
             f"[LlamaCppRunner] Initialized with pooled model: {self.model_name}"
         )
 
+    def supports_function_calling(self) -> bool:
+        """
+        Check if the llama.cpp model supports native function calling.
+        
+        Inspects the model's metadata and chat template to determine
+        if it has built-in support for function/tool calling.
+        
+        Returns:
+            True if model supports native function calling, False otherwise
+        """
+        try:
+            # Check chat template from model handle
+            chat_template = self.handle.get_chat_template()
+            if chat_template:
+                template_lower = chat_template.lower()
+                # Look for tool/function related tokens in the template
+                if any(keyword in template_lower for keyword in [
+                    'tool', 'function', '<tool_call>', '<function_call>',
+                    'tools', 'functions', 'tool_use', 'function_use'
+                ]):
+                    logger.info(f"[LlamaCppRunner] Model supports function calling (detected in chat template)")
+                    return True
+            
+            # Check model metadata for tool-related keys
+            if hasattr(self.model, 'metadata'):
+                metadata = self.model.metadata
+                if metadata:
+                    for key in metadata.keys():
+                        key_lower = key.lower()
+                        if 'tool' in key_lower or 'function' in key_lower:
+                            logger.info(f"[LlamaCppRunner] Model supports function calling (detected in metadata: {key})")
+                            return True
+            
+            logger.info(f"[LlamaCppRunner] Model does NOT support native function calling")
+            return False
+            
+        except Exception as e:
+            logger.warning(f"[LlamaCppRunner] Error detecting function calling support: {e}")
+            return False
+
     def _build_chat_messages(
         self,
         messages: Optional[List[Dict[str, str]]] = None,
