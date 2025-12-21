@@ -190,7 +190,7 @@ async def example_rag_native_tool():
         )
         
         # The agent will decide to use the tool (hybrid mode handles the rest)
-        q = "Search through all available documents and tell me what kind of information is stored in the knowledge base."
+        q = "What documents are available in the knowledge base? List all documents you can find."
         print(f"Question: {q}")
         result = await agent.run(q)
         print(f"Response: {result.output}")
@@ -229,7 +229,7 @@ async def example_rag_context_injection():
         # Manually inject search context
         search_result = await inject_search_context(
             runner,
-            query="product specifications and features",
+            query="documents content overview",  # Generic query
             top_k=5,
         )
         
@@ -237,7 +237,7 @@ async def example_rag_context_injection():
             print(f"Found {search_result.metadata.get('results_count', 0)} relevant sections")
         
         # Run agent - context is automatically included
-        result = await agent.run("Summarize the key specifications.")
+        result = await agent.run("What information is available in the knowledge base?")
         print(f"Response: {result.output}")
 
 
@@ -257,8 +257,15 @@ async def example_scoped_search():
     kb_config = ChromaKnowledgeStoreConfig(persist_directory="./chroma_db")
     knowledge_store = ChromaKnowledgeStore(kb_config)
     
-    # Simulate session with specific documents
-    session_document_ids = {"doc_abc123", "doc_def456"}
+    # Get actual document IDs from the knowledge store
+    documents = knowledge_store.list_documents()
+    if not documents:
+        print("No documents in knowledge store. Please add documents first.")
+        return
+    
+    # Use real document IDs from the store (take first 2)
+    session_document_ids = {doc["id"] for doc in documents[:2]}
+    print(f"Scoping search to documents: {session_document_ids}")
     
     config = LLMConfig(
         model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
@@ -285,7 +292,7 @@ async def example_scoped_search():
             tools=[scoped_search],
         )
         
-        result = await agent.run("What topics are covered in my documents?")
+        result = await agent.run("What content is available in these documents?")
         print(f"Response: {result.output}")
 
 
@@ -293,19 +300,19 @@ async def example_scoped_search():
 # Example 6: Structured Output
 # =============================================================================
 
-class ProductSummary(BaseModel):
-    """Structured output for product information."""
-    name: str
-    key_features: list[str]
-    target_audience: str
-    price_range: Optional[str] = None
+class DocumentSummary(BaseModel):
+    """Structured output for document information."""
+    title: str
+    summary: str
+    topics: list[str]
 
 
 async def example_structured_output():
     """
     Structured output: Get typed responses from the agent.
     
-    Pydantic AI can parse responses into Pydantic models.
+    Note: Small models (1.5B) may struggle with complex structured output.
+    Consider using a larger model for reliable structured responses.
     """
     kb_config = ChromaKnowledgeStoreConfig(persist_directory="./chroma_db")
     knowledge_store = ChromaKnowledgeStore(kb_config)
@@ -313,6 +320,7 @@ async def example_structured_output():
     config = LLMConfig(
         model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
         backend="llama_cpp",
+        temperature=0.1,  # Low temperature for more deterministic output
     )
     
     pool = ModelPool.get_instance()
@@ -326,21 +334,25 @@ async def example_structured_output():
         # Agent with structured output type
         agent = Agent(
             model=model,
-            output_type=ProductSummary,
+            output_type=DocumentSummary,
             instructions=(
-                "Extract product information from the knowledge base. "
-                "Return structured data about the product."
+                "Search the knowledge base and extract information. "
+                "Return a JSON object with: title (string), summary (string), topics (list of strings). "
+                "Example: {\"title\": \"Document Name\", \"summary\": \"Brief description\", \"topics\": [\"topic1\", \"topic2\"]}"
             ),
             tools=[search_tool],
+            retries=2,  # Allow more retries for structured output
         )
         
-        result = await agent.run("Get information about the main product.")
-        
-        # result.output is now a ProductSummary instance
-        summary: ProductSummary = result.output
-        print(f"Product: {summary.name}")
-        print(f"Features: {', '.join(summary.key_features)}")
-        print(f"Audience: {summary.target_audience}")
+        try:
+            result = await agent.run("Search the knowledge base and summarize the main document.")
+            summary: DocumentSummary = result.output
+            print(f"Title: {summary.title}")
+            print(f"Summary: {summary.summary}")
+            print(f"Topics: {', '.join(summary.topics)}")
+        except Exception as e:
+            print(f"Structured output failed (expected with small models): {e}")
+            print("Consider using a larger model for reliable structured output.")
 
 
 # =============================================================================
@@ -375,12 +387,17 @@ async def example_multi_tool():
             description="Search the document knowledge base.",
         )
         
-        # Add a custom calculation tool
+        # Add a custom calculation tool with proper builtins
         async def calculate(expression: str) -> str:
-            """Evaluate a mathematical expression."""
+            """Evaluate a mathematical expression safely."""
             try:
-                # Simple eval (in production, use a safe parser)
-                result = eval(expression, {"__builtins__": {}}, {})
+                # Allow safe math operations
+                allowed_names = {
+                    "abs": abs, "round": round, "min": min, "max": max,
+                    "sum": sum, "len": len, "pow": pow,
+                    "int": int, "float": float,
+                }
+                result = eval(expression, {"__builtins__": {}}, allowed_names)
                 return f"Result: {result}"
             except Exception as e:
                 return f"Error: {str(e)}"
@@ -391,13 +408,13 @@ async def example_multi_tool():
             model=model,
             instructions=(
                 "You are a helpful assistant with access to documents and a calculator. "
-                "Use search_docs to find information and calculate for math."
+                "Use search_docs to find information and calculate for math operations."
             ),
             tools=tools.get_tools(),
         )
         
         result = await agent.run(
-            "Find the product price in the docs and calculate 15% discount."
+            "Calculate the sum of 10, 20, 30, 40, and 50."
         )
         print(f"Response: {result.output}")
 
@@ -507,17 +524,18 @@ async def example_custom_settings():
 async def run_all_examples():
     """Run all examples sequentially."""
     examples = [
+        # ("Function Calling Detection", example_function_calling_detection),
         # ("Basic Usage", example_basic_usage),
         # ("Streaming", example_streaming),
-        ("RAG Native Tool (Hybrid Mode)", example_rag_native_tool),
+        # ("RAG Native Tool", example_rag_native_tool),
         # ("RAG Context Injection", example_rag_context_injection),
         # ("Scoped Search", example_scoped_search),
-        # ("Structured Output", example_structured_output),
+        ("Structured Output", example_structured_output),
         # ("Multi-Tool", example_multi_tool),
         # ("Conversation", example_conversation),
         # ("Custom Settings", example_custom_settings),
-        # ("Function Calling Detection (NEW)", example_function_calling_detection),
     ]
+    
     
     for name, example_fn in examples:
         print(f"\n{'='*60}")
@@ -527,6 +545,8 @@ async def run_all_examples():
             await example_fn()
         except Exception as e:
             print(f"Error in {name}: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":

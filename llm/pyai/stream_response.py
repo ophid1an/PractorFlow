@@ -39,6 +39,7 @@ class LocalStreamedResponse:
     _model_name_str: str = field(default="")
     _has_tools: bool = field(default=False)
     _supports_native_fc: bool = field(default=False)
+    _user_message_fallback: Optional[str] = field(default=None)
     _timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     _usage: Optional[RequestUsage] = field(default=None, init=False)
     _parts: List[ModelResponsePart] = field(default_factory=list, init=False)
@@ -53,6 +54,7 @@ class LocalStreamedResponse:
         model_request_parameters: ModelRequestParameters,
         has_tools: bool = False,
         supports_native_fc: bool = False,
+        user_message_fallback: Optional[str] = None,
     ):
         self._runner = runner
         self._gen_kwargs = gen_kwargs
@@ -60,6 +62,7 @@ class LocalStreamedResponse:
         self.model_request_parameters = model_request_parameters
         self._has_tools = has_tools
         self._supports_native_fc = supports_native_fc
+        self._user_message_fallback = user_message_fallback
         self._timestamp = datetime.now(timezone.utc)
         self._usage = None
         self._parts = []
@@ -74,6 +77,13 @@ class LocalStreamedResponse:
         """Extract tool calls from accumulated text."""
         tool_calls = []
         tool_names = {tool.name for tool in available_tools}
+        
+        # Build a map of tool name to required parameters
+        tool_required_params = {}
+        for tool in available_tools:
+            if hasattr(tool, 'parameters_json_schema'):
+                schema = tool.parameters_json_schema
+                tool_required_params[tool.name] = schema.get('required', [])
         
         # Try to find JSON objects
         json_pattern = r'\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}'
@@ -118,6 +128,20 @@ class LocalStreamedResponse:
             tool_args = obj.get('args') or obj.get('arguments', {})
             
             if tool_name and tool_name in tool_names:
+                # Ensure tool_args is a dict
+                if not isinstance(tool_args, dict):
+                    tool_args = {}
+                
+                # Fix empty or missing query parameter using fallback
+                if 'query' in tool_required_params.get(tool_name, []):
+                    query_value = tool_args.get('query', '')
+                    if not query_value or (isinstance(query_value, str) and not query_value.strip()):
+                        if self._user_message_fallback:
+                            tool_args['query'] = self._user_message_fallback
+                            logger.info(f"[LocalStreamedResponse] Empty query parameter, using user message fallback: '{self._user_message_fallback}'")
+                        else:
+                            logger.warning(f"[LocalStreamedResponse] Empty query parameter and no fallback available")
+                
                 tool_calls.append(ToolCallPart(
                     tool_name=tool_name,
                     args=tool_args,

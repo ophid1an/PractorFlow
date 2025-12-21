@@ -43,19 +43,14 @@ class TransformersRunner(LLMRunner):
         """
         Check if the transformers model supports native function calling.
         
-        Inspects the tokenizer's chat template and model configuration
-        to determine if it has built-in support for function/tool calling.
-        
         Returns:
             True if model supports native function calling, False otherwise
         """
         try:
-            # Check tokenizer chat template
             if self.tokenizer and hasattr(self.tokenizer, 'chat_template'):
                 chat_template = self.tokenizer.chat_template
                 if chat_template:
                     template_lower = str(chat_template).lower()
-                    # Look for tool/function related tokens in the template
                     if any(keyword in template_lower for keyword in [
                         'tool', 'function', '<tool_call>', '<function_call>',
                         'tools', 'functions', 'tool_use', 'function_use'
@@ -63,31 +58,13 @@ class TransformersRunner(LLMRunner):
                         logger.info(f"[TransformersRunner] Model supports function calling (detected in chat template)")
                         return True
             
-            # Check model configuration for capability flags
             if hasattr(self.model, 'config'):
                 config = self.model.config
-                
-                # Check if config has a to_dict method
                 if hasattr(config, 'to_dict'):
                     config_dict = config.to_dict()
-                    
-                    # Check for explicit capability flags
                     if config_dict.get('supports_function_calling', False):
                         logger.info(f"[TransformersRunner] Model supports function calling (config flag)")
                         return True
-                    
-                    # Check for tool-related configuration keys
-                    for key in config_dict.keys():
-                        key_lower = key.lower()
-                        if 'tool' in key_lower or 'function' in key_lower:
-                            logger.info(f"[TransformersRunner] Model supports function calling (detected in config: {key})")
-                            return True
-                
-                # Check for model_type that commonly support function calling
-                if hasattr(config, 'model_type'):
-                    model_type = config.model_type.lower() if config.model_type else ""
-                    # Note: This is intentionally conservative - we don't assume support based on model type alone
-                    # Models should explicitly indicate support via template or config
             
             logger.info(f"[TransformersRunner] Model does NOT support native function calling")
             return False
@@ -112,19 +89,19 @@ class TransformersRunner(LLMRunner):
         chat_messages = []
         system_parts = []
 
+        # Add custom instructions first
         if instructions:
             system_parts.append(instructions)
 
+        # Add context with clear instructions for the model to use it
         if context:
-            context_instruction = (
-                "You have been provided with relevant information from documents below. "
-                "Use this information to answer the user's question accurately. "
-                "Reference specific details from the context when relevant."
-            )
-            system_parts.append(context_instruction)
             system_parts.append(
-                f"\n=== DOCUMENT CONTEXT ===\n{context}\n=== END CONTEXT ===\n"
+                "You have access to the following REFERENCE DOCUMENTS. "
+                "Use ONLY this information to answer the user's question. "
+                "If the answer is in the documents, provide it. "
+                "Quote or reference specific parts when relevant."
             )
+            system_parts.append(f"REFERENCE DOCUMENTS:\n{context}\nEND OF DOCUMENTS.")
 
         if system_parts:
             chat_messages.append(
@@ -135,7 +112,11 @@ class TransformersRunner(LLMRunner):
             for msg in messages:
                 chat_messages.append({"role": msg["role"], "content": msg["content"]})
         else:
-            chat_messages.append({"role": "user", "content": prompt})
+            # When context is provided, remind the model to use it
+            user_content = prompt
+            if context:
+                user_content = f"{prompt}\n\n(Answer based on the reference documents provided above.)"
+            chat_messages.append({"role": "user", "content": user_content})
 
         return chat_messages
 

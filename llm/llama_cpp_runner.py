@@ -31,34 +31,22 @@ class LlamaCppRunner(LLMRunner):
         """
         Check if the llama.cpp model supports native function calling.
         
-        Inspects the model's metadata and chat template to determine
-        if it has built-in support for function/tool calling.
-        
         Returns:
             True if model supports native function calling, False otherwise
         """
         try:
-            # Check chat template from model handle
-            chat_template = self.handle.get_chat_template()
-            if chat_template:
-                template_lower = chat_template.lower()
-                # Look for tool/function related tokens in the template
-                if any(keyword in template_lower for keyword in [
-                    'tool', 'function', '<tool_call>', '<function_call>',
-                    'tools', 'functions', 'tool_use', 'function_use'
-                ]):
-                    logger.info(f"[LlamaCppRunner] Model supports function calling (detected in chat template)")
-                    return True
+            metadata = self.model.metadata if hasattr(self.model, 'metadata') else {}
             
-            # Check model metadata for tool-related keys
-            if hasattr(self.model, 'metadata'):
-                metadata = self.model.metadata
-                if metadata:
-                    for key in metadata.keys():
-                        key_lower = key.lower()
-                        if 'tool' in key_lower or 'function' in key_lower:
-                            logger.info(f"[LlamaCppRunner] Model supports function calling (detected in metadata: {key})")
-                            return True
+            if metadata:
+                chat_template = metadata.get("tokenizer.chat_template", "")
+                if chat_template:
+                    template_lower = str(chat_template).lower()
+                    if any(keyword in template_lower for keyword in [
+                        'tool', 'function', '<tool_call>', '<function_call>',
+                        'tools', 'functions', 'tool_use', 'function_use'
+                    ]):
+                        logger.info(f"[LlamaCppRunner] Model supports function calling (detected in chat template)")
+                        return True
             
             logger.info(f"[LlamaCppRunner] Model does NOT support native function calling")
             return False
@@ -83,19 +71,19 @@ class LlamaCppRunner(LLMRunner):
         chat_messages = []
         system_parts = []
 
+        # Add custom instructions first
         if instructions:
             system_parts.append(instructions)
 
+        # Add context with clear instructions for the model to use it
         if context:
-            context_instruction = (
-                "You have been provided with relevant information from documents below. "
-                "Use this information to answer the user's question accurately. "
-                "Reference specific details from the context when relevant."
-            )
-            system_parts.append(context_instruction)
             system_parts.append(
-                f"\n=== DOCUMENT CONTEXT ===\n{context}\n=== END CONTEXT ===\n"
+                "You have access to the following REFERENCE DOCUMENTS. "
+                "Use ONLY this information to answer the user's question. "
+                "If the answer is in the documents, provide it. "
+                "Quote or reference specific parts when relevant."
             )
+            system_parts.append(f"REFERENCE DOCUMENTS:\n{context}\nEND OF DOCUMENTS.")
 
         if system_parts:
             chat_messages.append(
@@ -106,7 +94,11 @@ class LlamaCppRunner(LLMRunner):
             for msg in messages:
                 chat_messages.append({"role": msg["role"], "content": msg["content"]})
         else:
-            chat_messages.append({"role": "user", "content": prompt})
+            # When context is provided, remind the model to use it
+            user_content = prompt
+            if context:
+                user_content = f"{prompt}\n\n(Answer based on the reference documents provided above.)"
+            chat_messages.append({"role": "user", "content": user_content})
 
         return chat_messages
 

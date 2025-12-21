@@ -28,6 +28,7 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
     ModelRequest,
+    UserPromptPart,
 )
 from pydantic_ai.usage import RequestUsage
 from pydantic_ai.tools import ToolDefinition
@@ -104,6 +105,26 @@ class LocalLLMModel(Model):
         """Return the model provider identifier."""
         return "local"
     
+    def _extract_last_user_message(self, messages: List[ModelMessage]) -> Optional[str]:
+        """
+        Extract the last user message from the conversation.
+        
+        Args:
+            messages: List of ModelMessage
+            
+        Returns:
+            The last user message text, or None if not found
+        """
+        for msg in reversed(messages):
+            if isinstance(msg, ModelRequest):
+                for part in msg.parts:
+                    if isinstance(part, UserPromptPart):
+                        content = part.content
+                        if isinstance(content, str):
+                            return content
+                        return str(content)
+        return None
+    
     def _build_tool_system_prompt(self, tools: List[ToolDefinition]) -> str:
         """
         Build system prompt with tool descriptions for prompt engineering mode.
@@ -118,6 +139,8 @@ class LocalLLMModel(Model):
             return ""
         
         tool_descriptions = []
+        first_tool_name = tools[0].name if tools else "tool_name"
+        
         for tool in tools:
             # Build parameter descriptions
             params_desc = []
@@ -130,44 +153,48 @@ class LocalLLMModel(Model):
                     param_type = param_info.get('type', 'any')
                     param_desc = param_info.get('description', '')
                     is_required = param_name in required
-                    req_str = " (required)" if is_required else " (optional)"
-                    params_desc.append(f"  - {param_name} ({param_type}){req_str}: {param_desc}")
+                    req_str = " (REQUIRED)" if is_required else " (optional)"
+                    params_desc.append(f"    {param_name} ({param_type}){req_str}: {param_desc}")
             
-            tool_desc = f"""
-Tool: {tool.name}
-Description: {tool.description}
-Parameters:
-{chr(10).join(params_desc) if params_desc else '  (no parameters)'}
-"""
+            tool_desc = f"""{tool.name}: {tool.description}
+  Parameters:
+{chr(10).join(params_desc) if params_desc else '    (no parameters)'}"""
             tool_descriptions.append(tool_desc)
         
-        system_prompt = f"""You have access to the following tools:
+        system_prompt = f"""You are an assistant with access to tools. You MUST use tools to answer questions about documents or knowledge.
 
+AVAILABLE TOOLS:
 {chr(10).join(tool_descriptions)}
 
-To use a tool, respond with ONLY a JSON object in this exact format:
-{{"tool": "tool_name", "args": {{"param1": "value1", "param2": "value2"}}}}
+HOW TO USE A TOOL:
+When you need information, respond with ONLY this JSON format (no other text):
+{{"tool": "{first_tool_name}", "args": {{"query": "your search terms here", "top_k": 5}}}}
 
-CRITICAL RULES:
-1. Output ONLY the JSON object, nothing else
-2. Do not include markdown code blocks or backticks
-3. Do not add any explanation before or after the JSON
-4. Use valid JSON syntax with double quotes
-5. ALL required parameters MUST be included in "args"
-6. If you don't need to use a tool, respond normally in plain text
+EXAMPLES:
 
-Example of correct tool usage:
-User: "Search for information about AI"
-Assistant: {{"tool": "search_knowledge", "args": {{"query": "AI", "top_k": 5}}}}
+User: What information do you have about machine learning?
+Your response: {{"tool": "{first_tool_name}", "args": {{"query": "machine learning", "top_k": 5}}}}
 
-After receiving tool results, use them to answer the user's question in plain text."""
+User: Find documents about Python programming
+Your response: {{"tool": "{first_tool_name}", "args": {{"query": "Python programming", "top_k": 5}}}}
+
+User: What documents are available?
+Your response: {{"tool": "{first_tool_name}", "args": {{"query": "documents available", "top_k": 10}}}}
+
+IMPORTANT RULES:
+1. When user asks about documents, knowledge, or information - ALWAYS use the tool first
+2. The "query" field must contain relevant search keywords (NEVER empty)
+3. Output ONLY the JSON when calling a tool - no extra text before or after
+4. After you receive tool results, summarize and answer based on that information
+5. Use the exact tool name: "{first_tool_name}" """
         
         return system_prompt
     
     def _extract_tool_calls_from_text(
         self,
         text: str,
-        available_tools: List[ToolDefinition]
+        available_tools: List[ToolDefinition],
+        user_message_fallback: Optional[str] = None,
     ) -> List[ToolCallPart]:
         """
         Extract tool calls from model's text output (prompt engineering mode).
@@ -175,6 +202,7 @@ After receiving tool results, use them to answer the user's question in plain te
         Args:
             text: Model's text response
             available_tools: List of available tools
+            user_message_fallback: Fallback text to use for empty query parameters
             
         Returns:
             List of extracted ToolCallPart objects
@@ -182,27 +210,28 @@ After receiving tool results, use them to answer the user's question in plain te
         tool_calls = []
         tool_names = {tool.name for tool in available_tools}
         
-        # Try to find JSON objects in the text
-        # Pattern 1: Clean JSON object
-        json_pattern = r'\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}'
-        
-        # Pattern 2: JSON in code blocks
-        code_block_pattern = r'```(?:json)?\s*(\{[^`]+\})\s*```'
+        # Build a map of tool name to required parameters
+        tool_required_params = {}
+        for tool in available_tools:
+            if hasattr(tool, 'parameters_json_schema'):
+                schema = tool.parameters_json_schema
+                tool_required_params[tool.name] = schema.get('required', [])
         
         matches = []
         
-        # Check for code blocks first
+        # Pattern for JSON in code blocks
+        code_block_pattern = r'```(?:json)?\s*(\{[^`]+\})\s*```'
         for match in re.finditer(code_block_pattern, text, re.DOTALL):
             try:
                 json_str = match.group(1).strip()
                 obj = json.loads(json_str)
-                matches.append(obj)
+                if 'tool' in obj or 'name' in obj:
+                    matches.append(obj)
             except json.JSONDecodeError:
                 continue
         
-        # If no code blocks, look for bare JSON
+        # Look for bare JSON objects
         if not matches:
-            # Find all JSON-like structures
             brace_depth = 0
             start_idx = None
             
@@ -228,12 +257,30 @@ After receiving tool results, use them to answer the user's question in plain te
             tool_name = obj.get('tool') or obj.get('name')
             tool_args = obj.get('args') or obj.get('arguments', {})
             
-            if tool_name and tool_name in tool_names:
-                tool_calls.append(ToolCallPart(
-                    tool_name=tool_name,
-                    args=tool_args,
-                    tool_call_id=f"call_{len(tool_calls)}"
-                ))
+            # Skip if tool name doesn't match any available tool
+            if not tool_name or tool_name not in tool_names:
+                logger.warning(f"[LocalLLMModel] Unknown tool name: {tool_name}, available: {tool_names}")
+                continue
+            
+            # Ensure tool_args is a dict
+            if not isinstance(tool_args, dict):
+                tool_args = {}
+            
+            # Fix empty or missing query parameter using fallback
+            if 'query' in tool_required_params.get(tool_name, []):
+                query_value = tool_args.get('query', '')
+                if not query_value or (isinstance(query_value, str) and not query_value.strip()):
+                    if user_message_fallback:
+                        tool_args['query'] = user_message_fallback
+                        logger.info(f"[LocalLLMModel] Empty query parameter, using user message fallback: '{user_message_fallback}'")
+                    else:
+                        logger.warning(f"[LocalLLMModel] Empty query parameter and no fallback available")
+            
+            tool_calls.append(ToolCallPart(
+                tool_name=tool_name,
+                args=tool_args,
+                tool_call_id=f"call_{len(tool_calls)}"
+            ))
         
         return tool_calls
     
@@ -265,10 +312,6 @@ After receiving tool results, use them to answer the user's question in plain te
         """
         Make a non-streaming request to the local LLM.
         
-        Implements hybrid function calling:
-        - Uses native function calling if model supports it
-        - Falls back to prompt engineering otherwise
-        
         Args:
             messages: Conversation history
             model_settings: Optional settings
@@ -281,6 +324,9 @@ After receiving tool results, use them to answer the user's question in plain te
         model_settings, model_request_parameters = self.prepare_request(
             model_settings, model_request_parameters
         )
+        
+        # Extract the last user message for fallback
+        user_message_fallback = self._extract_last_user_message(messages)
         
         # Convert messages to runner format
         conversion = self._converter.convert_messages(messages, self._system_prompt)
@@ -317,10 +363,6 @@ After receiving tool results, use them to answer the user's question in plain te
         if top_p is not None:
             gen_kwargs["top_p"] = top_p
         
-        # TODO: For native function calling mode, pass tools to runner
-        # This requires extending the runner interface to accept tools parameter
-        # For now, we only implement prompt engineering mode
-        
         # Call runner
         result = await self.runner.generate(**gen_kwargs)
         
@@ -340,15 +382,14 @@ After receiving tool results, use them to answer the user's question in plain te
         if has_tools:
             tool_calls = self._extract_tool_calls_from_text(
                 reply, 
-                model_request_parameters.function_tools
+                model_request_parameters.function_tools,
+                user_message_fallback=user_message_fallback,
             )
             
             if tool_calls:
                 parts.extend(tool_calls)
-                # Log extracted tool calls for debugging
                 for tc in tool_calls:
                     logger.info(f"[LocalLLMModel] Extracted tool call: {tc.tool_name}({tc.args})")
-                # Remove tool call JSON from text
                 reply = self._clean_text_from_tool_calls(reply)
                 logger.info(f"[LocalLLMModel] Extracted {len(tool_calls)} tool calls")
             else:
@@ -387,10 +428,6 @@ After receiving tool results, use them to answer the user's question in plain te
         """
         Make a streaming request to the local LLM.
         
-        Note: Streaming with tool calling is complex because we need to
-        accumulate the full response to parse tool calls. The stream wrapper
-        handles this.
-        
         Args:
             messages: Conversation history
             model_settings: Optional settings
@@ -404,6 +441,9 @@ After receiving tool results, use them to answer the user's question in plain te
         model_settings, model_request_parameters = self.prepare_request(
             model_settings, model_request_parameters
         )
+        
+        # Extract the last user message for fallback
+        user_message_fallback = self._extract_last_user_message(messages)
         
         # Convert messages
         conversion = self._converter.convert_messages(messages, self._system_prompt)
@@ -445,6 +485,7 @@ After receiving tool results, use them to answer the user's question in plain te
             model_request_parameters=model_request_parameters,
             has_tools=has_tools,
             supports_native_fc=self._supports_native_fc,
+            user_message_fallback=user_message_fallback,
         )
         
         try:
