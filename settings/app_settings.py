@@ -59,7 +59,7 @@ class LoggerConfig:
     KnowledgeLevel: str = os.getenv("LOG_KNOWLEDGE_LEVEL", "INFO")
     ModelPoolLevel: str = os.getenv("LOG_MODEL_POOL_LEVEL", "INFO")
     ToolLevel: str = os.getenv("LOG_TOOL_LEVEL", "INFO")
-
+    AgentLevel: str = os.getenv("LOG_AGENT_LEVEL", "INFO")
 
 @dataclass
 class AppConfig:

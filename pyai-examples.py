@@ -297,7 +297,7 @@ async def example_scoped_search():
 
 
 # =============================================================================
-# Example 6: Structured Output (FIXED - Using Tool-based approach)
+# Example 6: Structured Output
 # =============================================================================
 
 class DocumentSummary(BaseModel):

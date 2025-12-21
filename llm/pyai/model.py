@@ -42,7 +42,7 @@ from llm.pyai.stream_response import LocalStreamedResponse
 from logger.logger import get_logger
 from settings.app_settings import appConfiguration
 
-logger = get_logger("pyai_model", level=appConfiguration.LoggerConfiguration.RunnerLevel)
+logger = get_logger("agent", level=appConfiguration.LoggerConfiguration.AgentLevel)
 
 
 class LocalModelSettings(ModelSettings, total=False):
@@ -67,7 +67,6 @@ class LocalLLMModel(Model):
     def __init__(
         self,
         runner: LLMRunner,
-        model_name_override: Optional[str] = None,
         system_prompt: Optional[str] = None,
         settings: Optional[ModelSettings] = None,
     ):
@@ -76,13 +75,12 @@ class LocalLLMModel(Model):
         
         Args:
             runner: LLMRunner instance (llama.cpp or transformers)
-            model_name_override: Optional model name override
             system_prompt: Optional default system prompt
             settings: Optional model settings
         """
         super().__init__(settings=settings)
         self.runner = runner
-        self._model_name = model_name_override if model_name_override is not None else runner.model_name
+        self._model_name = runner.model_name
         self._system_prompt = system_prompt
         self._converter = MessageConverter()
         
