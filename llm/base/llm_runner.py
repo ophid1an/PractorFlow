@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Set, AsyncIterator
 
 from llm.llm_config import LLMConfig
@@ -19,6 +19,7 @@ class StreamChunk:
     usage: Optional[Dict[str, int]] = None
     context_used: Optional[str] = None
     search_metadata: Optional[Dict[str, Any]] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
 
 
 class LLMRunner(ABC):
@@ -148,6 +149,7 @@ class LLMRunner(ABC):
         instructions: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Generate text from messages or prompt with optional context.
@@ -164,11 +166,13 @@ class LLMRunner(ABC):
             instructions: System-level instructions/prompt
             temperature: Sampling temperature (uses config default if None)
             top_p: Nucleus sampling parameter (uses config default if None)
+            tools: Optional list of tool definitions for native function calling
 
         Returns:
             Dictionary with keys:
                 - reply: Response from the model
                 - latency_seconds: Generation time in seconds
+                - tool_calls: (optional) List of tool calls if native FC used
                 - context_used: (optional) Context string if search was used
                 - search_metadata: (optional) Metadata about search results
             
@@ -185,6 +189,7 @@ class LLMRunner(ABC):
         instructions: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncIterator[StreamChunk]:
         """
         Generate text with streaming output.
@@ -203,6 +208,7 @@ class LLMRunner(ABC):
             instructions: System-level instructions/prompt
             temperature: Sampling temperature (uses config default if None)
             top_p: Nucleus sampling parameter (uses config default if None)
+            tools: Optional list of tool definitions for native function calling
 
         Yields:
             StreamChunk objects containing:
@@ -213,6 +219,7 @@ class LLMRunner(ABC):
                 - usage: Token counts (on final chunk, if available)
                 - context_used: Context string (on final chunk, if search was used)
                 - search_metadata: Search metadata (on final chunk, if available)
+                - tool_calls: Native tool calls (on final chunk, if applicable)
             
         Note: Either messages or prompt must be provided, not both.
         """

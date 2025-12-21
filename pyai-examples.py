@@ -41,7 +41,7 @@ async def example_function_calling_detection():
     print("="*60)
     
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
     )
     
@@ -75,7 +75,7 @@ async def example_basic_usage():
     """
     # Configure model
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
         temperature=0.7,
     )
@@ -111,7 +111,7 @@ async def example_streaming():
     Streaming example: Get response chunks as they're generated.
     """
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
     )
     
@@ -162,7 +162,7 @@ async def example_rag_native_tool():
     # knowledge_store.add_document_from_file("./docs/product_manual.pdf")
     
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
         temperature=0.3,  # Lower temp for more reliable tool calling
     )
@@ -211,7 +211,7 @@ async def example_rag_context_injection():
     knowledge_store = ChromaKnowledgeStore(kb_config)
     
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
     )
     
@@ -268,7 +268,7 @@ async def example_scoped_search():
     print(f"Scoping search to documents: {session_document_ids}")
     
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
     )
     
@@ -318,7 +318,7 @@ async def example_structured_output():
     knowledge_store = ChromaKnowledgeStore(kb_config)
     
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
         temperature=0.1,  # Low temperature for more deterministic output
     )
@@ -368,7 +368,7 @@ async def example_multi_tool():
     knowledge_store = ChromaKnowledgeStore(kb_config)
     
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
         temperature=0.3,
     )
@@ -429,7 +429,7 @@ async def example_conversation():
     Shows how to maintain conversation history across turns.
     """
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
     )
     
@@ -474,7 +474,7 @@ async def example_custom_settings():
     from llm.pyai.model import LocalModelSettings
     
     config = LLMConfig(
-        model_name="Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf",
+        model_name="bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         backend="llama_cpp",
     )
     

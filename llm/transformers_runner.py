@@ -206,9 +206,28 @@ class TransformersRunner(LLMRunner):
         instructions: Optional[str] = None,
         temperature: float = None,
         top_p: float = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Async generate with optional context from prior search() call."""
+        """
+        Async generate with optional context from prior search() call.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            prompt: Single prompt string (alternative to messages)
+            instructions: System-level instructions/prompt
+            temperature: Sampling temperature (uses config default if None)
+            top_p: Nucleus sampling parameter (uses config default if None)
+            tools: Optional list of tool definitions (not used in transformers backend currently)
+            
+        Returns:
+            Dictionary with reply, latency_seconds, usage, and optionally context info
+        """
         start_time = time.time()
+
+        # Note: tools parameter is accepted for interface compatibility but
+        # transformers backend doesn't have native tool calling support yet
+        if tools:
+            logger.warning("[TransformersRunner] Native tool calling not implemented for transformers backend, tools will be ignored")
 
         context = self._consume_pending_context()
         context_metadata = None
@@ -264,9 +283,27 @@ class TransformersRunner(LLMRunner):
         instructions: Optional[str] = None,
         temperature: float = None,
         top_p: float = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Async streaming generation using TextIteratorStreamer."""
+        """
+        Async streaming generation using TextIteratorStreamer.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            prompt: Single prompt string (alternative to messages)
+            instructions: System-level instructions/prompt
+            temperature: Sampling temperature (uses config default if None)
+            top_p: Nucleus sampling parameter (uses config default if None)
+            tools: Optional list of tool definitions (not used in transformers backend currently)
+            
+        Yields:
+            StreamChunk objects with text deltas and final metadata
+        """
         start_time = time.time()
+
+        # Note: tools parameter is accepted for interface compatibility
+        if tools:
+            logger.warning("[TransformersRunner] Native tool calling not implemented for transformers backend, tools will be ignored")
 
         context = self._consume_pending_context()
         context_metadata = None

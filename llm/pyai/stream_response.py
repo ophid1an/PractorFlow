@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from pydantic_ai import PartDeltaEvent, PartStartEvent, TextPartDelta
 from pydantic_ai.models import ModelRequestParameters
@@ -72,12 +72,6 @@ class LocalStreamedResponse:
     def _extract_json_from_text(self, text: str) -> Optional[dict]:
         """
         Extract JSON object from text that may contain surrounding content.
-        
-        Args:
-            text: Text that may contain a JSON object
-            
-        Returns:
-            Parsed JSON dict or None if not found
         """
         # Try to find JSON in code blocks first
         code_block_pattern = r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'
@@ -113,7 +107,7 @@ class LocalStreamedResponse:
         text: str,
         available_tools: List[ToolDefinition]
     ) -> List[ToolCallPart]:
-        """Extract tool calls from accumulated text."""
+        """Extract tool calls from accumulated text (prompt engineering mode)."""
         tool_calls = []
         tool_names = {tool.name for tool in available_tools}
         
@@ -187,6 +181,22 @@ class LocalStreamedResponse:
         
         return tool_calls
     
+    def _convert_native_tool_calls_to_parts(
+        self,
+        tool_calls: List[Dict[str, Any]]
+    ) -> List[ToolCallPart]:
+        """
+        Convert native tool calls from runner to ToolCallPart objects.
+        """
+        parts = []
+        for tc in tool_calls:
+            parts.append(ToolCallPart(
+                tool_name=tc["tool_name"],
+                args=tc.get("args", {}),
+                tool_call_id=tc.get("tool_call_id", f"call_{len(parts)}")
+            ))
+        return parts
+    
     def _clean_text_from_tool_calls(self, text: str) -> str:
         """Remove tool call JSON from text."""
         # Remove code blocks with JSON
@@ -202,6 +212,7 @@ class LocalStreamedResponse:
         """Stream events with tool call extraction at the end."""
         text_part_index = 0
         first_chunk = True
+        native_tool_calls_found = []
         
         async for chunk in self._runner.generate_stream(**self._gen_kwargs):
             if chunk.text:
@@ -226,31 +237,53 @@ class LocalStreamedResponse:
                         output_tokens=chunk.usage.get("completion_tokens", 0),
                     )
                 
-                # Post-process for tool calls if needed
-                all_tools = list(self.model_request_parameters.function_tools or []) + list(self.model_request_parameters.output_tools or [])
-                if self._has_tools and all_tools:
-                    tool_calls = self._extract_tool_calls_from_text(
-                        self._accumulated_text,
-                        all_tools
-                    )
-                    
-                    if tool_calls:
-                        # Clean the text part
-                        cleaned_text = self._clean_text_from_tool_calls(self._accumulated_text)
-                        
-                        # Rebuild parts list
-                        new_parts = []
-                        
-                        # Add tool calls first
-                        new_parts.extend(tool_calls)
-                        
-                        # Add cleaned text if any
-                        if cleaned_text:
-                            new_parts.append(TextPart(content=cleaned_text))
-                        
-                        self._parts = new_parts
-                        
-                        logger.info(f"[LocalStreamedResponse] Extracted {len(tool_calls)} tool calls from stream")
+                # Check for native tool calls from the runner
+                if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                    native_tool_calls_found = chunk.tool_calls
+                    logger.info(f"[LocalStreamedResponse] Native tool calls from stream: {[tc['tool_name'] for tc in native_tool_calls_found]}")
+        
+        # Post-process for tool calls
+        all_tools = list(self.model_request_parameters.function_tools or []) + \
+                   list(self.model_request_parameters.output_tools or [])
+        
+        if native_tool_calls_found:
+            # Use native tool calls
+            tool_call_parts = self._convert_native_tool_calls_to_parts(native_tool_calls_found)
+            
+            # Rebuild parts list with tool calls first
+            new_parts = list(tool_call_parts)
+            
+            # Add text if any (after cleaning)
+            if self._accumulated_text.strip():
+                new_parts.append(TextPart(content=self._accumulated_text.strip()))
+            
+            self._parts = new_parts
+            logger.info(f"[LocalStreamedResponse] Using {len(tool_call_parts)} native tool calls")
+            
+        elif self._has_tools and all_tools and not self._supports_native_fc:
+            # Prompt engineering mode - extract from text
+            tool_calls = self._extract_tool_calls_from_text(
+                self._accumulated_text,
+                all_tools
+            )
+            
+            if tool_calls:
+                # Clean the text part
+                cleaned_text = self._clean_text_from_tool_calls(self._accumulated_text)
+                
+                # Rebuild parts list
+                new_parts = []
+                
+                # Add tool calls first
+                new_parts.extend(tool_calls)
+                
+                # Add cleaned text if any
+                if cleaned_text:
+                    new_parts.append(TextPart(content=cleaned_text))
+                
+                self._parts = new_parts
+                
+                logger.info(f"[LocalStreamedResponse] Extracted {len(tool_calls)} tool calls from text")
         
         self._stream_started = True
     

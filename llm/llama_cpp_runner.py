@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from typing import Dict, Any, Optional, List, AsyncIterator
 
@@ -55,6 +56,82 @@ class LlamaCppRunner(LLMRunner):
             logger.warning(f"[LlamaCppRunner] Error detecting function calling support: {e}")
             return False
 
+    def _convert_tools_to_llama_format(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Convert tool definitions to llama.cpp native format.
+        
+        Args:
+            tools: List of tool definitions in OpenAI/Pydantic AI format
+            
+        Returns:
+            List of tools in llama.cpp format
+        """
+        llama_tools = []
+        for tool in tools:
+            if "function" in tool:
+                # Already in OpenAI format
+                llama_tools.append(tool)
+            elif "name" in tool and "description" in tool:
+                # Pydantic AI ToolDefinition format
+                llama_tool = {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": tool.get("parameters", tool.get("parameters_json_schema", {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }))
+                    }
+                }
+                llama_tools.append(llama_tool)
+            else:
+                logger.warning(f"[LlamaCppRunner] Unknown tool format: {tool}")
+        return llama_tools
+
+    def _extract_tool_calls_from_response(
+        self, 
+        response: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract tool calls from llama.cpp native response.
+        
+        Args:
+            response: Response from create_chat_completion
+            
+        Returns:
+            List of tool call dicts with tool_name, args, tool_call_id
+        """
+        tool_calls = []
+        choices = response.get("choices", [])
+        
+        if not choices:
+            return tool_calls
+        
+        message = choices[0].get("message", {})
+        native_tool_calls = message.get("tool_calls", [])
+        
+        for tc in native_tool_calls:
+            func = tc.get("function", {})
+            tool_name = func.get("name", "")
+            args_str = func.get("arguments", "{}")
+            
+            # Parse arguments
+            try:
+                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+            except json.JSONDecodeError:
+                args = {}
+                logger.warning(f"[LlamaCppRunner] Failed to parse tool arguments: {args_str}")
+            
+            tool_calls.append({
+                "tool_name": tool_name,
+                "args": args,
+                "tool_call_id": tc.get("id", f"call_{len(tool_calls)}")
+            })
+        
+        return tool_calls
+
     def _build_chat_messages(
         self,
         messages: Optional[List[Dict[str, str]]] = None,
@@ -107,6 +184,7 @@ class LlamaCppRunner(LLMRunner):
         chat_messages: List[Dict[str, str]],
         temperature: float,
         top_p: float,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Synchronous generation - runs in thread pool."""
         completion_kwargs = {
@@ -119,6 +197,14 @@ class LlamaCppRunner(LLMRunner):
         if self.config.stop_tokens:
             completion_kwargs["stop"] = self.config.stop_tokens
 
+        # Add native tools if provided
+        if tools:
+            llama_tools = self._convert_tools_to_llama_format(tools)
+            if llama_tools:
+                completion_kwargs["tools"] = llama_tools
+                completion_kwargs["tool_choice"] = "auto"
+                logger.debug(f"[LlamaCppRunner] Passing {len(llama_tools)} tools to native API")
+
         return self.model.create_chat_completion(**completion_kwargs)
 
     async def generate(
@@ -129,8 +215,22 @@ class LlamaCppRunner(LLMRunner):
         instructions: Optional[str] = None,
         temperature: float = None,
         top_p: float = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Async generate with optional context from prior search() call."""
+        """
+        Async generate with optional context from prior search() call.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            prompt: Single prompt string (alternative to messages)
+            instructions: System-level instructions/prompt
+            temperature: Sampling temperature (uses config default if None)
+            top_p: Nucleus sampling parameter (uses config default if None)
+            tools: Optional list of tool definitions for native function calling
+            
+        Returns:
+            Dictionary with reply, latency_seconds, and optionally tool_calls
+        """
         start_time = time.time()
 
         context = self._consume_pending_context()
@@ -151,19 +251,28 @@ class LlamaCppRunner(LLMRunner):
         tp = self._get_top_p(top_p)
 
         logger.info("[LlamaCppRunner] Generating (async)...")
+        if tools:
+            logger.info(f"[LlamaCppRunner] With {len(tools)} native tools")
 
         # Run blocking inference in thread pool
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, self._generate_sync, chat_messages, temp, tp
+            None, self._generate_sync, chat_messages, temp, tp, tools
         )
 
         latency = time.time() - start_time
 
+        # Extract tool calls if present
+        tool_calls = self._extract_tool_calls_from_response(result)
+        
         response = {
             "reply": result,
             "latency_seconds": latency,
         }
+
+        if tool_calls:
+            response["tool_calls"] = tool_calls
+            logger.info(f"[LlamaCppRunner] Native tool calls extracted: {[tc['tool_name'] for tc in tool_calls]}")
 
         if context:
             response["context_used"] = context
@@ -180,8 +289,22 @@ class LlamaCppRunner(LLMRunner):
         instructions: Optional[str] = None,
         temperature: float = None,
         top_p: float = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Async streaming generation."""
+        """
+        Async streaming generation.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys
+            prompt: Single prompt string (alternative to messages)
+            instructions: System-level instructions/prompt
+            temperature: Sampling temperature (uses config default if None)
+            top_p: Nucleus sampling parameter (uses config default if None)
+            tools: Optional list of tool definitions for native function calling
+            
+        Yields:
+            StreamChunk objects with text deltas and final metadata
+        """
         start_time = time.time()
 
         context = self._consume_pending_context()
@@ -202,6 +325,8 @@ class LlamaCppRunner(LLMRunner):
         tp = self._get_top_p(top_p)
 
         logger.info("[LlamaCppRunner] Generating (async streaming)...")
+        if tools:
+            logger.info(f"[LlamaCppRunner] With {len(tools)} native tools")
 
         # Create async queue to bridge sync generator to async
         queue: asyncio.Queue[Optional[StreamChunk]] = asyncio.Queue()
@@ -220,7 +345,15 @@ class LlamaCppRunner(LLMRunner):
                 if self.config.stop_tokens:
                     completion_kwargs["stop"] = self.config.stop_tokens
 
+                # Add native tools if provided
+                if tools:
+                    llama_tools = self._convert_tools_to_llama_format(tools)
+                    if llama_tools:
+                        completion_kwargs["tools"] = llama_tools
+                        completion_kwargs["tool_choice"] = "auto"
+
                 finish_reason = None
+                accumulated_tool_calls = []
 
                 for chunk in self.model.create_chat_completion(**completion_kwargs):
                     choices = chunk.get("choices", [])
@@ -235,11 +368,48 @@ class LlamaCppRunner(LLMRunner):
                     if chunk_finish_reason:
                         finish_reason = chunk_finish_reason
 
+                    # Handle streaming tool calls
+                    if "tool_calls" in delta:
+                        for tc in delta["tool_calls"]:
+                            idx = tc.get("index", 0)
+                            while len(accumulated_tool_calls) <= idx:
+                                accumulated_tool_calls.append({
+                                    "id": "",
+                                    "function": {"name": "", "arguments": ""}
+                                })
+                            
+                            if "id" in tc:
+                                accumulated_tool_calls[idx]["id"] = tc["id"]
+                            if "function" in tc:
+                                if "name" in tc["function"]:
+                                    accumulated_tool_calls[idx]["function"]["name"] += tc["function"]["name"]
+                                if "arguments" in tc["function"]:
+                                    accumulated_tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+
                     if content:
                         # Put chunk in queue (blocking call from thread)
                         asyncio.run_coroutine_threadsafe(
                             queue.put(StreamChunk(text=content, finished=False)), loop
                         ).result()
+
+                # Process accumulated tool calls
+                tool_calls_result = []
+                for tc in accumulated_tool_calls:
+                    func = tc.get("function", {})
+                    tool_name = func.get("name", "")
+                    args_str = func.get("arguments", "{}")
+                    
+                    try:
+                        args = json.loads(args_str) if args_str else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                    
+                    if tool_name:
+                        tool_calls_result.append({
+                            "tool_name": tool_name,
+                            "args": args,
+                            "tool_call_id": tc.get("id", f"call_{len(tool_calls_result)}")
+                        })
 
                 # Put final chunk
                 latency = time.time() - start_time
@@ -251,6 +421,11 @@ class LlamaCppRunner(LLMRunner):
                     context_used=context,
                     search_metadata=context_metadata,
                 )
+                
+                # Attach tool calls to final chunk if present
+                if tool_calls_result:
+                    final_chunk.tool_calls = tool_calls_result
+                    
                 asyncio.run_coroutine_threadsafe(queue.put(final_chunk), loop).result()
 
             except Exception as e:

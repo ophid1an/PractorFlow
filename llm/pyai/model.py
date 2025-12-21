@@ -14,7 +14,7 @@ import json
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import AsyncIterator, List, Optional, Any
+from typing import AsyncIterator, List, Optional, Any, Dict
 
 from pydantic_ai.models import (
     Model,
@@ -62,12 +62,6 @@ class LocalLLMModel(Model):
     Supports hybrid function calling:
     - Native: Uses model's built-in function calling if supported
     - Prompt Engineering: Falls back to instructing via system prompt
-    
-    Usage:
-        runner = create_runner(handle, knowledge_store)
-        model = LocalLLMModel(runner)
-        agent = Agent(model=model, tools=[search_tool])
-        result = await agent.run("Search for information about X")
     """
     
     def __init__(
@@ -105,6 +99,40 @@ class LocalLLMModel(Model):
     def system(self) -> str:
         """Return the model provider identifier."""
         return "local"
+    
+    def _convert_tool_definitions_to_native(
+        self, 
+        tools: List[ToolDefinition]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert Pydantic AI ToolDefinition objects to native tool format.
+        
+        Args:
+            tools: List of ToolDefinition from Pydantic AI
+            
+        Returns:
+            List of tool dicts in OpenAI/llama.cpp format
+        """
+        native_tools = []
+        for tool in tools:
+            params = {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+            if hasattr(tool, 'parameters_json_schema'):
+                params = tool.parameters_json_schema
+            
+            native_tool = {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": params
+                }
+            }
+            native_tools.append(native_tool)
+        return native_tools
     
     def _has_tool_results(self, messages: List[ModelMessage]) -> bool:
         """
@@ -226,7 +254,6 @@ class LocalLLMModel(Model):
         
         # Build instruction based on what tools are available
         if function_tools and output_tools:
-            # Both function tools and output tool
             example_output = json.dumps({"tool": output_tool_name, "args": example_args})
             instruction = f"""You MUST respond with JSON tool calls only. Never respond with plain text.
 
@@ -246,7 +273,6 @@ After seeing tool results, your next response MUST be:
 Never write plain text. Always respond with a JSON tool call."""
         
         elif output_tools:
-            # Only output tool (structured output without function tools)
             example_output = json.dumps({"tool": output_tool_name, "args": example_args})
             instruction = f"""You MUST respond with a JSON tool call only. Never respond with plain text.
 
@@ -258,7 +284,6 @@ RESPONSE FORMAT:
 Respond with ONLY the JSON object above, filled with your answer. No other text."""
         
         else:
-            # Only function tools (no structured output required)
             first_tool = function_tools[0].name
             instruction = f"""You have access to tools. When you need information, respond with a JSON tool call.
 
@@ -274,12 +299,6 @@ After receiving tool results, provide your answer based on the information recei
     def _extract_json_from_text(self, text: str) -> Optional[dict]:
         """
         Extract JSON object from text that may contain surrounding content.
-        
-        Args:
-            text: Text that may contain a JSON object
-            
-        Returns:
-            Parsed JSON dict or None if not found
         """
         # Try to find JSON in code blocks first
         code_block_pattern = r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'
@@ -318,14 +337,6 @@ After receiving tool results, provide your answer based on the information recei
     ) -> List[ToolCallPart]:
         """
         Extract tool calls from model's text output (prompt engineering mode).
-        
-        Args:
-            text: Model's text response
-            available_tools: List of available tools
-            user_message_fallback: Fallback text to use for empty query parameters
-            
-        Returns:
-            List of extracted ToolCallPart objects
         """
         tool_calls = []
         tool_names = {tool.name for tool in available_tools}
@@ -407,12 +418,6 @@ After receiving tool results, provide your answer based on the information recei
     def _clean_text_from_tool_calls(self, text: str) -> str:
         """
         Remove tool call JSON from text response.
-        
-        Args:
-            text: Original text with potential tool calls
-            
-        Returns:
-            Cleaned text without tool call JSON
         """
         # Remove code blocks with JSON
         text = re.sub(r'```(?:json)?\s*\{[^`]+\}\s*```', '', text, flags=re.DOTALL)
@@ -423,6 +428,28 @@ After receiving tool results, provide your answer based on the information recei
         
         return text.strip()
     
+    def _convert_native_tool_calls_to_parts(
+        self,
+        tool_calls: List[Dict[str, Any]]
+    ) -> List[ToolCallPart]:
+        """
+        Convert native tool calls from runner to ToolCallPart objects.
+        
+        Args:
+            tool_calls: List of tool call dicts from runner
+            
+        Returns:
+            List of ToolCallPart objects
+        """
+        parts = []
+        for tc in tool_calls:
+            parts.append(ToolCallPart(
+                tool_name=tc["tool_name"],
+                args=tc.get("args", {}),
+                tool_call_id=tc.get("tool_call_id", f"call_{len(parts)}")
+            ))
+        return parts
+    
     async def request(
         self,
         messages: List[ModelMessage],
@@ -431,22 +458,11 @@ After receiving tool results, provide your answer based on the information recei
     ) -> ModelResponse:
         """
         Make a non-streaming request to the local LLM.
-        
-        Args:
-            messages: Conversation history
-            model_settings: Optional settings
-            model_request_parameters: Request parameters including tools
-            
-        Returns:
-            ModelResponse with generated content and/or tool calls
         """
         # Prepare request
         model_settings, model_request_parameters = self.prepare_request(
             model_settings, model_request_parameters
         )
-        
-        # Extract the last user message for fallback
-        user_message_fallback = self._extract_last_user_message(messages)
         
         # Extract the last user message for fallback
         user_message_fallback = self._extract_last_user_message(messages)
@@ -471,24 +487,30 @@ After receiving tool results, provide your answer based on the information recei
         if conversion.system_prompt:
             system_parts.append(conversion.system_prompt)
         
-        # Add tool instructions for prompt engineering mode
-        if has_tools and not self._supports_native_fc:
+        # Prepare native tools if in native mode
+        native_tools = None
+        if has_tools and self._supports_native_fc:
+            # Convert all tools to native format
+            all_tool_defs = list(model_request_parameters.function_tools or []) + \
+                           list(model_request_parameters.output_tools or [])
+            native_tools = self._convert_tool_definitions_to_native(all_tool_defs)
+            logger.debug(f"[LocalLLMModel] Using NATIVE mode with {len(native_tools)} tools")
+        elif has_tools and not self._supports_native_fc:
+            # Add tool instructions for prompt engineering mode
             tool_prompt = self._build_tool_system_prompt(
                 model_request_parameters.function_tools,
                 model_request_parameters.output_tools,
             )
             system_parts.append(tool_prompt)
             logger.debug("[LocalLLMModel] Using PROMPT_ENGINEERING mode for tools")
-        elif has_tools and self._supports_native_fc:
-            logger.debug("[LocalLLMModel] Using NATIVE mode for tools")
         
         final_system_prompt = "\n\n".join(system_parts) if system_parts else None
         
         # Get the converted messages
         runner_messages = conversion.messages
         
-        # If we have tool results and output tools, append a reminder to the last user message
-        if has_tool_results and has_output_tools and runner_messages:
+        # If we have tool results and output tools in prompt engineering mode, append a reminder
+        if has_tool_results and has_output_tools and not self._supports_native_fc and runner_messages:
             output_tool_name = model_request_parameters.output_tools[0].name
             reminder = f'\n\nRespond with ONLY a JSON tool call: {{"tool": "{output_tool_name}", "args": {{...}}}}'
             
@@ -508,8 +530,21 @@ After receiving tool results, provide your answer based on the information recei
         if top_p is not None:
             gen_kwargs["top_p"] = top_p
         
+        # Add native tools if available
+        if native_tools:
+            gen_kwargs["tools"] = native_tools
+        
         # Call runner
         result = await self.runner.generate(**gen_kwargs)
+        
+        # Build response parts
+        parts: List[ModelResponsePart] = []
+        
+        # Check for native tool calls first
+        if native_tools and "tool_calls" in result and result["tool_calls"]:
+            native_tool_calls = result["tool_calls"]
+            parts.extend(self._convert_native_tool_calls_to_parts(native_tool_calls))
+            logger.info(f"[LocalLLMModel] Native tool calls: {[tc['tool_name'] for tc in native_tool_calls]}")
         
         # Extract response text
         reply = result.get("reply", "")
@@ -518,15 +553,13 @@ After receiving tool results, provide your answer based on the information recei
             choices = reply.get("choices", [])
             if choices:
                 message = choices[0].get("message", {})
-                reply = message.get("content", "")
+                reply = message.get("content", "") or ""
         
-        # Build response parts
-        parts: List[ModelResponsePart] = []
-        
-        # Extract tool calls if tools were provided
-        if has_tools:
+        # If no native tool calls but tools were provided (prompt engineering mode)
+        if has_tools and not parts:
             # Combine function tools and output tools for extraction
-            all_tools = list(model_request_parameters.function_tools or []) + list(model_request_parameters.output_tools or [])
+            all_tools = list(model_request_parameters.function_tools or []) + \
+                       list(model_request_parameters.output_tools or [])
             
             tool_calls = self._extract_tool_calls_from_text(
                 reply, 
@@ -539,12 +572,12 @@ After receiving tool results, provide your answer based on the information recei
                 for tc in tool_calls:
                     logger.info(f"[LocalLLMModel] Extracted tool call: {tc.tool_name}({tc.args})")
                 reply = self._clean_text_from_tool_calls(reply)
-                logger.info(f"[LocalLLMModel] Extracted {len(tool_calls)} tool calls")
+                logger.info(f"[LocalLLMModel] Extracted {len(tool_calls)} tool calls from text")
             else:
                 logger.debug(f"[LocalLLMModel] No tool calls found in response: {reply[:200]}")
         
         # Add text part if there's remaining text
-        if reply.strip():
+        if reply and reply.strip():
             parts.append(TextPart(content=reply))
         
         # If no parts, add empty text part
@@ -575,15 +608,6 @@ After receiving tool results, provide your answer based on the information recei
     ) -> AsyncIterator[StreamedResponse]:
         """
         Make a streaming request to the local LLM.
-        
-        Args:
-            messages: Conversation history
-            model_settings: Optional settings
-            model_request_parameters: Request parameters including tools
-            run_context: Optional run context
-            
-        Yields:
-            StreamedResponse that can be iterated for events
         """
         # Prepare request
         model_settings, model_request_parameters = self.prepare_request(
@@ -613,8 +637,15 @@ After receiving tool results, provide your answer based on the information recei
         if conversion.system_prompt:
             system_parts.append(conversion.system_prompt)
         
-        # Add tool instructions for prompt engineering mode
-        if has_tools and not self._supports_native_fc:
+        # Prepare native tools if in native mode
+        native_tools = None
+        if has_tools and self._supports_native_fc:
+            all_tool_defs = list(model_request_parameters.function_tools or []) + \
+                           list(model_request_parameters.output_tools or [])
+            native_tools = self._convert_tool_definitions_to_native(all_tool_defs)
+            logger.debug(f"[LocalLLMModel] Stream: Using NATIVE mode with {len(native_tools)} tools")
+        elif has_tools and not self._supports_native_fc:
+            # Add tool instructions for prompt engineering mode
             tool_prompt = self._build_tool_system_prompt(
                 model_request_parameters.function_tools,
                 model_request_parameters.output_tools,
@@ -626,8 +657,8 @@ After receiving tool results, provide your answer based on the information recei
         # Get the converted messages
         runner_messages = conversion.messages
         
-        # If we have tool results and output tools, append a reminder
-        if has_tool_results and has_output_tools and runner_messages:
+        # If we have tool results and output tools in prompt engineering mode, append a reminder
+        if has_tool_results and has_output_tools and not self._supports_native_fc and runner_messages:
             output_tool_name = model_request_parameters.output_tools[0].name
             reminder = f'\n\nRespond with ONLY a JSON tool call: {{"tool": "{output_tool_name}", "args": {{...}}}}'
             
@@ -645,6 +676,10 @@ After receiving tool results, provide your answer based on the information recei
             gen_kwargs["temperature"] = temperature
         if top_p is not None:
             gen_kwargs["top_p"] = top_p
+        
+        # Add native tools if available
+        if native_tools:
+            gen_kwargs["tools"] = native_tools
         
         # Create streamed response wrapper
         stream = LocalStreamedResponse(
