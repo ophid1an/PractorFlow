@@ -27,6 +27,7 @@ from pydantic_ai.messages import (
     ModelResponsePart,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     ModelRequest,
     UserPromptPart,
 )
@@ -105,6 +106,23 @@ class LocalLLMModel(Model):
         """Return the model provider identifier."""
         return "local"
     
+    def _has_tool_results(self, messages: List[ModelMessage]) -> bool:
+        """
+        Check if the messages contain any tool results.
+        
+        Args:
+            messages: List of ModelMessage
+            
+        Returns:
+            True if any message contains ToolReturnPart
+        """
+        for msg in messages:
+            if isinstance(msg, ModelRequest):
+                for part in msg.parts:
+                    if isinstance(part, ToolReturnPart):
+                        return True
+        return False
+    
     def _extract_last_user_message(self, messages: List[ModelMessage]) -> Optional[str]:
         """
         Extract the last user message from the conversation.
@@ -125,70 +143,172 @@ class LocalLLMModel(Model):
                         return str(content)
         return None
     
-    def _build_tool_system_prompt(self, tools: List[ToolDefinition]) -> str:
+    def _build_tool_system_prompt(
+        self, 
+        function_tools: List[ToolDefinition],
+        output_tools: List[ToolDefinition] = None,
+    ) -> str:
         """
         Build system prompt with tool descriptions for prompt engineering mode.
         
         Args:
-            tools: List of available tools
+            function_tools: List of available function tools
+            output_tools: List of output tools (for structured output)
             
         Returns:
             System prompt instructing model how to use tools
         """
-        if not tools:
+        output_tools = output_tools or []
+        function_tools = function_tools or []
+        
+        # No tools at all - return empty string
+        if not function_tools and not output_tools:
             return ""
         
-        tool_descriptions = []
-        first_tool_name = tools[0].name if tools else "tool_name"
+        prompt_parts = []
+        all_tool_names = []
         
-        for tool in tools:
-            # Build parameter descriptions
-            params_desc = []
-            if hasattr(tool, 'parameters_json_schema'):
-                schema = tool.parameters_json_schema
-                properties = schema.get('properties', {})
-                required = schema.get('required', [])
-                
-                for param_name, param_info in properties.items():
-                    param_type = param_info.get('type', 'any')
-                    param_desc = param_info.get('description', '')
-                    is_required = param_name in required
-                    req_str = " (REQUIRED)" if is_required else " (optional)"
-                    params_desc.append(f"    {param_name} ({param_type}){req_str}: {param_desc}")
+        # Handle function tools
+        if function_tools:
+            tool_descriptions = []
             
-            tool_desc = f"""{tool.name}: {tool.description}
-  Parameters:
-{chr(10).join(params_desc) if params_desc else '    (no parameters)'}"""
-            tool_descriptions.append(tool_desc)
+            for tool in function_tools:
+                all_tool_names.append(tool.name)
+                params_desc = []
+                
+                if hasattr(tool, 'parameters_json_schema'):
+                    schema = tool.parameters_json_schema
+                    properties = schema.get('properties', {})
+                    required = schema.get('required', [])
+                    
+                    for param_name, param_info in properties.items():
+                        param_type = param_info.get('type', 'any')
+                        param_desc = param_info.get('description', '')
+                        is_required = param_name in required
+                        req_str = " (REQUIRED)" if is_required else " (optional)"
+                        params_desc.append(f"    - {param_name} ({param_type}){req_str}: {param_desc}")
+                
+                tool_desc = f"- {tool.name}: {tool.description}\n  Parameters:\n" + "\n".join(params_desc)
+                tool_descriptions.append(tool_desc)
+            
+            prompt_parts.append("FUNCTION TOOLS:\n" + "\n".join(tool_descriptions))
         
-        system_prompt = f"""You are an assistant with access to tools. You MUST use tools to answer questions about documents or knowledge.
-
-AVAILABLE TOOLS:
-{chr(10).join(tool_descriptions)}
-
-HOW TO USE A TOOL:
-When you need information, respond with ONLY this JSON format (no other text):
-{{"tool": "{first_tool_name}", "args": {{"query": "your search terms here", "top_k": 5}}}}
-
-EXAMPLES:
-
-User: What information do you have about machine learning?
-Your response: {{"tool": "{first_tool_name}", "args": {{"query": "machine learning", "top_k": 5}}}}
-
-User: Find documents about Python programming
-Your response: {{"tool": "{first_tool_name}", "args": {{"query": "Python programming", "top_k": 5}}}}
-
-User: What documents are available?
-Your response: {{"tool": "{first_tool_name}", "args": {{"query": "documents available", "top_k": 10}}}}
-
-IMPORTANT RULES:
-1. When user asks about documents, knowledge, or information - ALWAYS use the tool first
-2. The "query" field must contain relevant search keywords (NEVER empty)
-3. Output ONLY the JSON when calling a tool - no extra text before or after
-4. After you receive tool results, summarize and answer based on that information
-5. Use the exact tool name: "{first_tool_name}" """
+        # Handle output tools (structured output)
+        output_tool_name = None
+        example_args = {}
+        if output_tools:
+            output_tool = output_tools[0]
+            output_tool_name = output_tool.name
+            all_tool_names.append(output_tool.name)
+            
+            output_params = []
+            
+            if hasattr(output_tool, 'parameters_json_schema'):
+                schema = output_tool.parameters_json_schema
+                properties = schema.get('properties', {})
+                
+                for prop_name, prop_info in properties.items():
+                    prop_type = prop_info.get('type', 'string')
+                    prop_desc = prop_info.get('description', prop_name)
+                    output_params.append(f"    - {prop_name} ({prop_type}): {prop_desc}")
+                    
+                    if prop_type == 'string':
+                        example_args[prop_name] = f"your {prop_name} here"
+                    elif prop_type == 'array':
+                        example_args[prop_name] = ["item1", "item2", "item3"]
+                    elif prop_type == 'integer':
+                        example_args[prop_name] = 0
+                    elif prop_type == 'boolean':
+                        example_args[prop_name] = True
+            
+            output_desc = f"- {output_tool.name}: Use this to return your final structured answer\n  Parameters:\n" + "\n".join(output_params)
+            prompt_parts.append(f"OUTPUT TOOL (you MUST call this for your final answer):\n{output_desc}")
         
-        return system_prompt
+        # Build instruction based on what tools are available
+        if function_tools and output_tools:
+            # Both function tools and output tool
+            example_output = json.dumps({"tool": output_tool_name, "args": example_args})
+            instruction = f"""You MUST respond with JSON tool calls only. Never respond with plain text.
+
+{chr(10).join(prompt_parts)}
+
+WORKFLOW:
+1. First, call a function tool to gather information
+2. After receiving tool results, you MUST call "{output_tool_name}" with your final answer
+
+RESPONSE FORMAT (use this exact JSON structure):
+{{"tool": "TOOL_NAME", "args": {{"param": "value"}}}}
+
+IMPORTANT: When you see "[Tool Result:" in the conversation, that means you already called a tool.
+After seeing tool results, your next response MUST be:
+{example_output}
+
+Never write plain text. Always respond with a JSON tool call."""
+        
+        elif output_tools:
+            # Only output tool (structured output without function tools)
+            example_output = json.dumps({"tool": output_tool_name, "args": example_args})
+            instruction = f"""You MUST respond with a JSON tool call only. Never respond with plain text.
+
+{chr(10).join(prompt_parts)}
+
+RESPONSE FORMAT:
+{example_output}
+
+Respond with ONLY the JSON object above, filled with your answer. No other text."""
+        
+        else:
+            # Only function tools (no structured output required)
+            first_tool = function_tools[0].name
+            instruction = f"""You have access to tools. When you need information, respond with a JSON tool call.
+
+{chr(10).join(prompt_parts)}
+
+TO USE A TOOL, respond with:
+{{"tool": "{first_tool}", "args": {{"query": "your search terms"}}}}
+
+After receiving tool results, provide your answer based on the information received."""
+        
+        return instruction
+    
+    def _extract_json_from_text(self, text: str) -> Optional[dict]:
+        """
+        Extract JSON object from text that may contain surrounding content.
+        
+        Args:
+            text: Text that may contain a JSON object
+            
+        Returns:
+            Parsed JSON dict or None if not found
+        """
+        # Try to find JSON in code blocks first
+        code_block_pattern = r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'
+        for match in re.finditer(code_block_pattern, text, re.DOTALL):
+            try:
+                return json.loads(match.group(1).strip())
+            except json.JSONDecodeError:
+                continue
+        
+        # Try to find bare JSON objects using brace matching
+        brace_depth = 0
+        start_idx = None
+        
+        for i, char in enumerate(text):
+            if char == '{':
+                if brace_depth == 0:
+                    start_idx = i
+                brace_depth += 1
+            elif char == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and start_idx is not None:
+                    try:
+                        json_str = text[start_idx:i+1]
+                        return json.loads(json_str)
+                    except json.JSONDecodeError:
+                        start_idx = None
+                        continue
+        
+        return None
     
     def _extract_tool_calls_from_text(
         self,
@@ -328,6 +448,9 @@ IMPORTANT RULES:
         # Extract the last user message for fallback
         user_message_fallback = self._extract_last_user_message(messages)
         
+        # Extract the last user message for fallback
+        user_message_fallback = self._extract_last_user_message(messages)
+        
         # Convert messages to runner format
         conversion = self._converter.convert_messages(messages, self._system_prompt)
         
@@ -336,7 +459,12 @@ IMPORTANT RULES:
         top_p = model_settings.get('top_p') if model_settings else None
         
         # Check if tools are requested
-        has_tools = bool(model_request_parameters.function_tools)
+        has_function_tools = bool(model_request_parameters.function_tools)
+        has_output_tools = bool(model_request_parameters.output_tools)
+        has_tools = has_function_tools or has_output_tools
+        
+        # Check if there are tool results in the messages (means we already called a tool)
+        has_tool_results = self._has_tool_results(messages)
         
         # Build system prompt
         system_parts = []
@@ -345,7 +473,10 @@ IMPORTANT RULES:
         
         # Add tool instructions for prompt engineering mode
         if has_tools and not self._supports_native_fc:
-            tool_prompt = self._build_tool_system_prompt(model_request_parameters.function_tools)
+            tool_prompt = self._build_tool_system_prompt(
+                model_request_parameters.function_tools,
+                model_request_parameters.output_tools,
+            )
             system_parts.append(tool_prompt)
             logger.debug("[LocalLLMModel] Using PROMPT_ENGINEERING mode for tools")
         elif has_tools and self._supports_native_fc:
@@ -353,9 +484,23 @@ IMPORTANT RULES:
         
         final_system_prompt = "\n\n".join(system_parts) if system_parts else None
         
+        # Get the converted messages
+        runner_messages = conversion.messages
+        
+        # If we have tool results and output tools, append a reminder to the last user message
+        if has_tool_results and has_output_tools and runner_messages:
+            output_tool_name = model_request_parameters.output_tools[0].name
+            reminder = f'\n\nRespond with ONLY a JSON tool call: {{"tool": "{output_tool_name}", "args": {{...}}}}'
+            
+            # Find the last user message and append reminder
+            for i in range(len(runner_messages) - 1, -1, -1):
+                if runner_messages[i].get("role") == "user":
+                    runner_messages[i]["content"] += reminder
+                    break
+        
         # Build generation kwargs
         gen_kwargs = {
-            "messages": conversion.messages,
+            "messages": runner_messages,
             "instructions": final_system_prompt,
         }
         if temperature is not None:
@@ -380,9 +525,12 @@ IMPORTANT RULES:
         
         # Extract tool calls if tools were provided
         if has_tools:
+            # Combine function tools and output tools for extraction
+            all_tools = list(model_request_parameters.function_tools or []) + list(model_request_parameters.output_tools or [])
+            
             tool_calls = self._extract_tool_calls_from_text(
                 reply, 
-                model_request_parameters.function_tools,
+                all_tools,
                 user_message_fallback=user_message_fallback,
             )
             
@@ -453,7 +601,12 @@ IMPORTANT RULES:
         top_p = model_settings.get('top_p') if model_settings else None
         
         # Check if tools are requested
-        has_tools = bool(model_request_parameters.function_tools)
+        has_function_tools = bool(model_request_parameters.function_tools)
+        has_output_tools = bool(model_request_parameters.output_tools)
+        has_tools = has_function_tools or has_output_tools
+        
+        # Check if there are tool results in the messages
+        has_tool_results = self._has_tool_results(messages)
         
         # Build system prompt
         system_parts = []
@@ -462,14 +615,30 @@ IMPORTANT RULES:
         
         # Add tool instructions for prompt engineering mode
         if has_tools and not self._supports_native_fc:
-            tool_prompt = self._build_tool_system_prompt(model_request_parameters.function_tools)
+            tool_prompt = self._build_tool_system_prompt(
+                model_request_parameters.function_tools,
+                model_request_parameters.output_tools,
+            )
             system_parts.append(tool_prompt)
         
         final_system_prompt = "\n\n".join(system_parts) if system_parts else None
         
+        # Get the converted messages
+        runner_messages = conversion.messages
+        
+        # If we have tool results and output tools, append a reminder
+        if has_tool_results and has_output_tools and runner_messages:
+            output_tool_name = model_request_parameters.output_tools[0].name
+            reminder = f'\n\nRespond with ONLY a JSON tool call: {{"tool": "{output_tool_name}", "args": {{...}}}}'
+            
+            for i in range(len(runner_messages) - 1, -1, -1):
+                if runner_messages[i].get("role") == "user":
+                    runner_messages[i]["content"] += reminder
+                    break
+        
         # Build kwargs
         gen_kwargs = {
-            "messages": conversion.messages,
+            "messages": runner_messages,
             "instructions": final_system_prompt,
         }
         if temperature is not None:

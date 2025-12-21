@@ -69,6 +69,45 @@ class LocalStreamedResponse:
         self._accumulated_text = ""
         self._stream_started = False
     
+    def _extract_json_from_text(self, text: str) -> Optional[dict]:
+        """
+        Extract JSON object from text that may contain surrounding content.
+        
+        Args:
+            text: Text that may contain a JSON object
+            
+        Returns:
+            Parsed JSON dict or None if not found
+        """
+        # Try to find JSON in code blocks first
+        code_block_pattern = r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'
+        for match in re.finditer(code_block_pattern, text, re.DOTALL):
+            try:
+                return json.loads(match.group(1).strip())
+            except json.JSONDecodeError:
+                continue
+        
+        # Try to find bare JSON objects using brace matching
+        brace_depth = 0
+        start_idx = None
+        
+        for i, char in enumerate(text):
+            if char == '{':
+                if brace_depth == 0:
+                    start_idx = i
+                brace_depth += 1
+            elif char == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and start_idx is not None:
+                    try:
+                        json_str = text[start_idx:i+1]
+                        return json.loads(json_str)
+                    except json.JSONDecodeError:
+                        start_idx = None
+                        continue
+        
+        return None
+    
     def _extract_tool_calls_from_text(
         self,
         text: str,
@@ -85,18 +124,16 @@ class LocalStreamedResponse:
                 schema = tool.parameters_json_schema
                 tool_required_params[tool.name] = schema.get('required', [])
         
-        # Try to find JSON objects
-        json_pattern = r'\{[^{}]*"tool"\s*:\s*"([^"]+)"[^{}]*\}'
-        code_block_pattern = r'```(?:json)?\s*(\{[^`]+\})\s*```'
-        
         matches = []
         
         # Check for code blocks
+        code_block_pattern = r'```(?:json)?\s*(\{[^`]+\})\s*```'
         for match in re.finditer(code_block_pattern, text, re.DOTALL):
             try:
                 json_str = match.group(1).strip()
                 obj = json.loads(json_str)
-                matches.append(obj)
+                if 'tool' in obj or 'name' in obj:
+                    matches.append(obj)
             except json.JSONDecodeError:
                 continue
         
@@ -190,10 +227,11 @@ class LocalStreamedResponse:
                     )
                 
                 # Post-process for tool calls if needed
-                if self._has_tools and self.model_request_parameters.function_tools:
+                all_tools = list(self.model_request_parameters.function_tools or []) + list(self.model_request_parameters.output_tools or [])
+                if self._has_tools and all_tools:
                     tool_calls = self._extract_tool_calls_from_text(
                         self._accumulated_text,
-                        self.model_request_parameters.function_tools
+                        all_tools
                     )
                     
                     if tool_calls:

@@ -9,11 +9,11 @@ Note: These examples are for reference and documentation purposes.
 """
 
 import asyncio
-from typing import Optional
-from pydantic import BaseModel
+from typing import Optional, List
+from pydantic import BaseModel, Field
 
 # Pydantic AI imports
-from pydantic_ai import Agent
+from pydantic_ai import Agent, Tool
 
 # Local LLM imports
 from llm import LLMConfig, ModelPool, create_runner
@@ -297,22 +297,22 @@ async def example_scoped_search():
 
 
 # =============================================================================
-# Example 6: Structured Output
+# Example 6: Structured Output (FIXED - Using Tool-based approach)
 # =============================================================================
 
 class DocumentSummary(BaseModel):
     """Structured output for document information."""
-    title: str
-    summary: str
-    topics: list[str]
+    title: str = Field(description="The title or name of the document")
+    summary: str = Field(description="A brief summary of the document content")
+    topics: List[str] = Field(description="List of main topics covered in the document")
 
 
 async def example_structured_output():
     """
     Structured output: Get typed responses from the agent.
     
-    Note: Small models (1.5B) may struggle with complex structured output.
-    Consider using a larger model for reliable structured responses.
+    Uses Pydantic AI's output_type with a tool-based approach for models 
+    without native function calling support.
     """
     kb_config = ChromaKnowledgeStoreConfig(persist_directory="./chroma_db")
     knowledge_store = ChromaKnowledgeStore(kb_config)
@@ -331,17 +331,15 @@ async def example_structured_output():
         
         search_tool = create_knowledge_search_tool(runner)
         
-        # Agent with structured output type
+        # Create agent with search tool and structured output type
         agent = Agent(
             model=model,
-            output_type=DocumentSummary,
             instructions=(
-                "Search the knowledge base and extract information. "
-                "Return a JSON object with: title (string), summary (string), topics (list of strings). "
-                "Example: {\"title\": \"Document Name\", \"summary\": \"Brief description\", \"topics\": [\"topic1\", \"topic2\"]}"
+                "You are a document analyst. Search the knowledge base and provide a structured summary. "
+                "First use search_knowledge to find documents, then return a DocumentSummary."
             ),
             tools=[search_tool],
-            retries=2,  # Allow more retries for structured output
+            output_type=DocumentSummary,
         )
         
         try:
@@ -351,8 +349,9 @@ async def example_structured_output():
             print(f"Summary: {summary.summary}")
             print(f"Topics: {', '.join(summary.topics)}")
         except Exception as e:
-            print(f"Structured output failed (expected with small models): {e}")
-            print("Consider using a larger model for reliable structured output.")
+            print(f"Structured output failed: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # =============================================================================
@@ -524,16 +523,16 @@ async def example_custom_settings():
 async def run_all_examples():
     """Run all examples sequentially."""
     examples = [
-        # ("Function Calling Detection", example_function_calling_detection),
-        # ("Basic Usage", example_basic_usage),
-        # ("Streaming", example_streaming),
-        # ("RAG Native Tool", example_rag_native_tool),
-        # ("RAG Context Injection", example_rag_context_injection),
-        # ("Scoped Search", example_scoped_search),
+        ("Function Calling Detection", example_function_calling_detection),
+        ("Basic Usage", example_basic_usage),
+        ("Streaming", example_streaming),
+        ("RAG Native Tool", example_rag_native_tool),
+        ("RAG Context Injection", example_rag_context_injection),
+        ("Scoped Search", example_scoped_search),
         ("Structured Output", example_structured_output),
-        # ("Multi-Tool", example_multi_tool),
-        # ("Conversation", example_conversation),
-        # ("Custom Settings", example_custom_settings),
+        ("Multi-Tool", example_multi_tool),
+        ("Conversation", example_conversation),
+        ("Custom Settings", example_custom_settings),
     ]
     
     
