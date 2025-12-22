@@ -35,7 +35,7 @@ from llm.knowledge.knowledge_store import KnowledgeStore
 from logger.logger import get_logger
 from settings.app_settings import appConfiguration
 
-logger = get_logger("pyai_tools", level=appConfiguration.LoggerConfiguration.ToolLevel)
+logger = get_logger("agent", level=appConfiguration.LoggerConfiguration.AgentLevel)
 
 
 @dataclass

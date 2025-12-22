@@ -26,7 +26,7 @@ from llm.base.llm_runner import LLMRunner
 from logger.logger import get_logger
 from settings.app_settings import appConfiguration
 
-logger = get_logger("pyai_stream", level=appConfiguration.LoggerConfiguration.AgentLevel)
+logger = get_logger("agent", level=appConfiguration.LoggerConfiguration.AgentLevel)
 
 
 class LocalStreamedResponse:
