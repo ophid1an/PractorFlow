@@ -13,3 +13,5 @@ chardet
 sentence-transformers
 chromadb
 bitsandbytes
+duckduckgo_search
+serpapi

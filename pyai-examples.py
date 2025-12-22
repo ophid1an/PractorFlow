@@ -18,10 +18,15 @@ from pydantic_ai import Agent, RunContext
 from llm import LLMConfig, ModelPool, create_runner
 from llm.knowledge import ChromaKnowledgeStore, ChromaKnowledgeStoreConfig
 from llm.pyai import LocalLLMModel, KnowledgeDeps, search_knowledge
+from llm.tools.base_web_search import DuckDuckGoSearchTool
+from llm.tools.serpapi_web_search import SerpAPISearchTool
 
 
 # example_model_name = "Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf"
-example_model_name = "bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+example_model_name = (
+    "bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+)
+# example_model_name = "Qwen/Qwen3-VL-8B-Instruct-GGUF/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
 # =============================================================================
 # Example 1: Basic Usage - Simple Agent (No Tools)
 # =============================================================================
@@ -212,7 +217,9 @@ async def example_scoped_search():
             session_id="session_123",
         )
 
-        result = await agent.run("What content is available in these documents?", deps=deps)
+        result = await agent.run(
+            "What content is available in these documents?", deps=deps
+        )
         print(f"Response: {result.output}")
 
 
@@ -402,6 +409,189 @@ async def example_multiple_tools():
 
 
 # =============================================================================
+# Example 7: Web Search with DuckDuckGo (Free)
+# =============================================================================
+
+
+async def example_web_search_duckduckgo():
+    """
+    Web search example using DuckDuckGo (free, no API key).
+
+    Demonstrates integrating the DuckDuckGo web search tool with a Pydantic AI agent.
+    """
+    print("=" * 60)
+    print("Example 7: Web Search with DuckDuckGo")
+    print("=" * 60)
+
+    @dataclass
+    class WebSearchDeps:
+        web_search_tool: DuckDuckGoSearchTool
+
+    config = LLMConfig(
+        model_name=example_model_name,
+        backend="llama_cpp",
+        temperature=0.3,
+    )
+
+    pool = ModelPool.get_instance(max_models=1)
+
+    async with pool.acquire_context(config) as handle:
+        runner = create_runner(handle)
+        model = LocalLLMModel(runner)
+
+        agent = Agent(
+            model=model,
+            deps_type=WebSearchDeps,
+            system_prompt=(
+                "You are a helpful assistant with access to web search. "
+                "Use the search_web tool to find current information "
+                "when answering questions about recent events or facts."
+            ),
+        )
+
+        @agent.tool
+        async def search_web(
+            ctx: RunContext[WebSearchDeps], query: str, max_results: int = 5
+        ) -> str:
+            """Search the web for current information.
+
+            Args:
+                ctx: The run context with dependencies.
+                query: The search query to find information on the web.
+                max_results: Maximum number of results to return.
+            """
+            result = ctx.deps.web_search_tool.execute(
+                query=query, max_results=max_results
+            )
+
+            if result.success and result.data:
+                return result.data
+            elif result.success:
+                return "No results found for the query."
+            else:
+                return f"Search error: {result.error}"
+
+        # Create dependencies
+        deps = WebSearchDeps(web_search_tool=DuckDuckGoSearchTool())
+
+        result = await agent.run(
+            "What are the latest developments in artificial intelligence?",
+            deps=deps,
+        )
+        print(f"Response: {result.output}")
+
+
+# =============================================================================
+# Example 8: Web Search with SerpAPI (Premium)
+# =============================================================================
+
+
+async def example_web_search_serpapi():
+    """
+    Web search example using SerpAPI (premium, requires API key).
+
+    Demonstrates integrating the SerpAPI web search tool with a Pydantic AI agent.
+    Supports Google, Bing, Yahoo, and other search engines.
+    """
+    print("=" * 60)
+    print("Example 8: Web Search with SerpAPI")
+    print("=" * 60)
+
+    import os
+
+    api_key = os.environ.get("SERPAPI_API_KEY")
+    if not api_key:
+        print("Skipping: SERPAPI_API_KEY environment variable not set")
+        print("Set it with: export SERPAPI_API_KEY='your-api-key'")
+        return
+
+    @dataclass
+    class SerpAPISearchDeps:
+        web_search_tool: SerpAPISearchTool
+
+    config = LLMConfig(
+        model_name=example_model_name,
+        backend="llama_cpp",
+        temperature=0.3,
+    )
+
+    pool = ModelPool.get_instance(max_models=1)
+
+    async with pool.acquire_context(config) as handle:
+        runner = create_runner(handle)
+        model = LocalLLMModel(runner)
+
+        agent = Agent(
+            model=model,
+            deps_type=SerpAPISearchDeps,
+            system_prompt=(
+                "You are a helpful assistant with access to Google search. "
+                "Use the available search tools to find current information, "
+                "news, or images when answering questions."
+            ),
+        )
+
+        @agent.tool
+        async def search_web(
+            ctx: RunContext[SerpAPISearchDeps], query: str, max_results: int = 5
+        ) -> str:
+            """Search Google for current information.
+
+            Args:
+                ctx: The run context with dependencies.
+                query: The search query to find information on the web.
+                max_results: Maximum number of results to return.
+            """
+            result = ctx.deps.web_search_tool.execute(
+                query=query, max_results=max_results
+            )
+
+            if result.success and result.data:
+                return result.data
+            elif result.success:
+                return "No results found for the query."
+            else:
+                return f"Search error: {result.error}"
+
+        @agent.tool
+        async def search_news(
+            ctx: RunContext[SerpAPISearchDeps], query: str, max_results: int = 5
+        ) -> str:
+            """Search Google News for recent news articles.
+
+            Args:
+                ctx: The run context with dependencies.
+                query: The search query to find news articles.
+                max_results: Maximum number of results to return.
+            """
+            result = ctx.deps.web_search_tool.search_news(
+                query=query, max_results=max_results
+            )
+
+            if result.success and result.data:
+                return result.data
+            elif result.success:
+                return "No news results found for the query."
+            else:
+                return f"News search error: {result.error}"
+
+        # Create dependencies with SerpAPI tool
+        serp_tool = SerpAPISearchTool(
+            api_key=api_key,
+            engine="google",
+            country="us",
+            language="en",
+        )
+        deps = SerpAPISearchDeps(web_search_tool=serp_tool)
+
+        result = await agent.run(
+            "What are the top tech news stories today?",
+            deps=deps,
+        )
+        print(f"Response: {result.output}")
+
+
+# =============================================================================
 # Run Examples
 # =============================================================================
 
@@ -409,12 +599,14 @@ async def example_multiple_tools():
 async def run_all_examples():
     """Run all examples sequentially."""
     examples = [
-        ("Basic Usage", example_basic_usage),
-        ("RAG with Tool", example_rag_with_tool),
-        ("Scoped Search", example_scoped_search),
-        ("Streaming", example_streaming),
-        ("Conversation", example_conversation),
-        ("Multiple Tools", example_multiple_tools),
+        # ("Basic Usage", example_basic_usage),
+        # ("RAG with Tool", example_rag_with_tool),
+        # ("Scoped Search", example_scoped_search),
+        # ("Streaming", example_streaming),
+        # ("Conversation", example_conversation),
+        # ("Multiple Tools", example_multiple_tools),
+        ("Web Search DuckDuckGo", example_web_search_duckduckgo),
+        # ("Web Search SerpAPI", example_web_search_serpapi),
     ]
 
     for name, example_fn in examples:
