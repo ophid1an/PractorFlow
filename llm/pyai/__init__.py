@@ -5,7 +5,7 @@ Provides a custom Model implementation that bridges Pydantic AI agents
 with the local LLM inference library (llama.cpp and transformers backends).
 
 Usage:
-    from llm.pyai import LocalLLMModel, create_knowledge_search_tool
+    from llm.pyai import LocalLLMModel, KnowledgeDeps, search_knowledge
 
     # Create model from runner
     model = LocalLLMModel(runner)
@@ -15,19 +15,28 @@ Usage:
     result = await agent.run("Hello!")
 
     # With knowledge search tool
-    tool = create_knowledge_search_tool(runner)
-    agent = Agent(model=model, tools=[tool])
+    agent = Agent(model=model, deps_type=KnowledgeDeps)
+    agent.tool(search_knowledge)
 """
 
 from llm.pyai.model import LocalLLMModel
 from llm.pyai.stream_response import LocalStreamedResponse
 from llm.pyai.message_converter import MessageConverter
-from llm.pyai.tools import create_knowledge_search_tool, KnowledgeSearchParams
+from llm.pyai.tools import (
+    KnowledgeDeps,
+    search_knowledge,
+    search_knowledge_generic,
+    register_knowledge_tools,
+    format_search_results,
+)
 
 __all__ = [
     "LocalLLMModel",
+    "LocalStreamedResponse",
     "MessageConverter",
-    "create_knowledge_search_tool",
-    "KnowledgeSearchParams",
-    "LocalStreamedResponse"
+    "KnowledgeDeps",
+    "search_knowledge",
+    "search_knowledge_generic",
+    "register_knowledge_tools",
+    "format_search_results",
 ]
