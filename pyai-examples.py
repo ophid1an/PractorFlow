@@ -23,10 +23,10 @@ from llm.tools.serpapi_web_search import SerpAPISearchTool
 
 
 # example_model_name = "Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf"
-example_model_name = (
-    "bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-)
-# example_model_name = "Qwen/Qwen3-VL-8B-Instruct-GGUF/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+# example_model_name = "bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+example_model_name = "Qwen/Qwen3-VL-8B-Instruct-GGUF/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+backend_runner="llama_cpp"
+example_model_name = "mistralai/Ministral-3-8B-Instruct-2512-GGUF/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf.gguf"
 # =============================================================================
 # Example 1: Basic Usage - Simple Agent (No Tools)
 # =============================================================================
@@ -44,7 +44,7 @@ async def example_basic_usage():
 
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
         temperature=0.7,
     )
 
@@ -95,7 +95,7 @@ async def example_rag_with_tool():
     # LLM config
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
         temperature=0.3,
     )
 
@@ -169,7 +169,7 @@ async def example_scoped_search():
 
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
     )
 
     pool = ModelPool.get_instance()
@@ -238,7 +238,7 @@ async def example_streaming():
 
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
     )
 
     pool = ModelPool.get_instance()
@@ -285,7 +285,7 @@ async def example_conversation():
 
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
     )
 
     pool = ModelPool.get_instance()
@@ -336,7 +336,7 @@ async def example_multiple_tools():
 
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
         temperature=0.3,
     )
 
@@ -429,7 +429,7 @@ async def example_web_search_duckduckgo():
 
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
         temperature=0.3,
     )
 
@@ -511,7 +511,7 @@ async def example_web_search_serpapi():
 
     config = LLMConfig(
         model_name=example_model_name,
-        backend="llama_cpp",
+        backend=backend_runner,
         temperature=0.3,
     )
 
@@ -599,14 +599,14 @@ async def example_web_search_serpapi():
 async def run_all_examples():
     """Run all examples sequentially."""
     examples = [
-        # ("Basic Usage", example_basic_usage),
-        # ("RAG with Tool", example_rag_with_tool),
-        # ("Scoped Search", example_scoped_search),
-        # ("Streaming", example_streaming),
-        # ("Conversation", example_conversation),
-        # ("Multiple Tools", example_multiple_tools),
+        ("Basic Usage", example_basic_usage),
+        ("RAG with Tool", example_rag_with_tool),
+        ("Scoped Search", example_scoped_search),
+        ("Streaming", example_streaming),
+        ("Conversation", example_conversation),
+        ("Multiple Tools", example_multiple_tools),
         ("Web Search DuckDuckGo", example_web_search_duckduckgo),
-        # ("Web Search SerpAPI", example_web_search_serpapi),
+        ("Web Search SerpAPI", example_web_search_serpapi),
     ]
 
     for name, example_fn in examples:

@@ -24,7 +24,7 @@ from settings.app_settings import appConfiguration
 logger = get_logger(
     "model_pool", level=appConfiguration.LoggerConfiguration.ModelPoolLevel
 )
-
+verbose_runner = appConfiguration.LoggerConfiguration.RunnerLevel=="DEBUG"
 
 class ModelPool:
     """
@@ -173,7 +173,7 @@ class ModelPool:
             "n_ctx": config.n_ctx,
             "n_gpu_layers": config.n_gpu_layers,
             "embedding": False,
-            "verbose": False,
+            "verbose": verbose_runner,
         }
 
         if config.n_batch is not None:

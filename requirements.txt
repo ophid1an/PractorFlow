@@ -11,3 +11,4 @@ chromadb
 bitsandbytes
 ddgs
 serpapi
+pydantic_ai

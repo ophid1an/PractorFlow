@@ -63,7 +63,9 @@ class LoggerConfig:
 
 @dataclass
 class AppConfig:
-    LoggerConfiguration: LoggerConfig = LoggerConfig()
+    LoggerConfiguration: LoggerConfig =  field(
+        default_factory=lambda:LoggerConfig()
+    )
     ModelConfiguration: LLMConfig = field(
         default_factory=lambda: LLMConfig(
             model_name=os.getenv(
