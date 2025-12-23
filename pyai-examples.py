@@ -16,7 +16,8 @@ from pydantic_ai import Agent, RunContext
 
 # Local LLM imports
 from llm import LLMConfig, ModelPool, create_runner
-from llm.knowledge import ChromaKnowledgeStore, ChromaKnowledgeStoreConfig
+from llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore
+from llm.knowledge.chroma_knowledge_config import ChromaKnowledgeStoreConfig
 from llm.pyai import LocalLLMModel, KnowledgeDeps, search_knowledge
 from llm.tools.base_web_search import DuckDuckGoSearchTool
 from llm.tools.serpapi_web_search import SerpAPISearchTool

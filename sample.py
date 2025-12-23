@@ -14,7 +14,7 @@ import asyncio
 import sys
 
 from llm import  ModelPool, create_runner
-from llm.knowledge import ChromaKnowledgeStore
+from llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore
 from settings.app_settings import appConfiguration
 
 async def main():

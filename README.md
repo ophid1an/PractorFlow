@@ -372,7 +372,7 @@ async with pool.acquire_context(config) as handle:
 ### Secure Document Ingestion with RAG
 
 ```python
-from llm.knowledge import ChromaKnowledgeStore
+from llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore
 from settings.app_settings import appConfiguration
 
 # Initialize knowledge store (all data stays local)
