@@ -1,14 +1,249 @@
+# ======================================================================================
+# PRACTORFLOW - Private AI Service Requirements
+# ======================================================================================
+# This file contains all dependencies needed to run PractorFlow, a self-hosted AI service
+# for organizations that cannot share their data with third-party APIs.
+# ======================================================================================
+
+# ======================================================================================
+# LLAMA.CPP - GGUF Model Inference Backend
+# ======================================================================================
+# llama-cpp-python provides Python bindings for llama.cpp, enabling efficient inference
+# of quantized GGUF models. This is the primary backend for running local LLMs.
+#
+# WHY NEEDED:
+# - Efficient CPU/GPU inference for quantized models (4-bit, 5-bit, 8-bit GGUF)
+# - Lower memory footprint compared to full-precision models
+# - Hardware acceleration via CUDA, Metal, or CPU SIMD instructions
+# - Native support for most open-source LLMs (Llama, Mistral, Qwen, etc.)
+#
+# SPECIAL CONSIDERATIONS FOR QWEN3 AND MISTRAL3:
+# -------------------------------------------------------------------------------
+# IMPORTANT: Standard llama-cpp-python does NOT support Qwen3VL or Mistral3 models
+# due to architectural changes in these newer model versions. You must use a
+# specialized build if you need these models.
+#
+# OPTION 1: For Qwen3VL/Mistral3 support (Python 3.12, CUDA 12.8, Linux/WSL2)
+# Uncomment the line below to use a custom wheel with vision model support:
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.18-cu128-AVX2-linux-20251220/llama_cpp_python-0.3.18-cp312-cp312-linux_x86_64.whl
+#
+# OPTION 2: For Qwen3VL/Mistral3 support (Python 3.10, CUDA 12.8, Linux/WSL2)
+# Uncomment the line below if you're using Python 3.10:
+# llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.18-cu128-AVX2-linux-20251220/llama_cpp_python-0.3.18-cp310-cp310-linux_x86_64.whl
+#
+# OPTION 3: Build from source (advanced, for any CUDA architecture)
+# If the prebuilt wheels don't work for your system, build from source:
+# CMAKE_ARGS="-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89 -DCMAKE_CUDA_COMPILER=$(which nvcc)" pip install git+https://github.com/JamePeng/llama-cpp-python.git --no-cache-dir
+#
+# OPTION 4: Standard llama-cpp-python (for all other GGUF models)
+# Use this for Llama 2/3, Mistral 7B, Qwen 1.5/2.5, and most other models:
 llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+# -------------------------------------------------------------------------------
+
+# ======================================================================================
+# PYTORCH - Deep Learning Framework
+# ======================================================================================
+# PyTorch is the underlying tensor computation library used by transformers and
+# embedding models. It provides GPU acceleration and automatic differentiation.
+#
+# WHY NEEDED:
+# - Foundation for transformers backend (HuggingFace models)
+# - GPU acceleration for model inference and embeddings
+# - Tensor operations for neural network computations
+# - Required by most AI/ML Python libraries in the stack
 torch
+
+# ======================================================================================
+# TRANSFORMERS - HuggingFace Models Backend
+# ======================================================================================
+# The transformers library provides an alternative backend to llama.cpp for running
+# models from HuggingFace Hub in their original format (safetensors, PyTorch).
+#
+# WHY NEEDED:
+# - Run non-GGUF models directly from HuggingFace (e.g., Qwen2.5-7B-Instruct)
+# - Access to latest model architectures before GGUF conversion
+# - Native support for features like Flash Attention 2
+# - Tokenizer management and chat template handling
+# - Model-specific optimizations from original authors
 transformers
+
+# ======================================================================================
+# ACCELERATE - Distributed Training and Inference Optimization
+# ======================================================================================
+# Accelerate simplifies distributed training and provides device placement utilities
+# for multi-GPU setups and mixed precision inference.
+#
+# WHY NEEDED:
+# - Automatic device placement (device_map="auto") for transformers models
+# - Mixed precision inference (fp16, bf16) for faster generation
+# - Memory-efficient model loading (load_in_8bit, load_in_4bit)
+# - Multi-GPU support when scaling beyond single GPU
 accelerate
-mistral-common
+
+# ======================================================================================
+# PROTOBUF - Protocol Buffers for Model Serialization
+# ======================================================================================
+# Protocol Buffers is a language-neutral serialization format used by some models
+# for storing configurations and tokenizers.
+#
+# WHY NEEDED:
+# - Required by certain model formats (particularly older or specialized models)
+# - Tokenizer configuration serialization for some HuggingFace models
+# - Dependency for mistral-common
 protobuf
+
+# ======================================================================================
+# DOCLING - Advanced Document Parsing
+# ======================================================================================
+# Docling is an enterprise-grade document conversion library that extracts structured
+# content from PDFs, DOCX, PPTX, images, and more.
+#
+# WHY NEEDED:
+# - Parse complex PDFs with tables, images, and multi-column layouts
+# - Extract text from Office documents (DOCX, PPTX, XLSX)
+# - OCR capabilities for scanned documents and images
+# - Markdown export for clean, structured document representation
+# - Superior to basic text extraction libraries (PyPDF2, pdfminer)
+# - Essential for RAG systems processing real-world business documents
 docling
+
+# ======================================================================================
+# CHARDET - Character Encoding Detection
+# ======================================================================================
+# Chardet automatically detects character encodings in text files, handling documents
+# that may not be UTF-8 encoded.
+#
+# WHY NEEDED:
+# - Robust text file reading across different encodings (latin-1, cp1252, etc.)
+# - Prevents encoding errors when ingesting user-uploaded documents
+# - Handles legacy documents from Windows systems (cp1252) or international sources
+# - Fallback when UTF-8 decoding fails
 chardet
+
+# ======================================================================================
+# MISTRAL-COMMON - Mistral AI Tokenizers and Utilities
+# ======================================================================================
+# Official Mistral AI library providing tokenizers and model-specific utilities
+# for Mistral and Mixtral models.
+#
+# WHY NEEDED:
+# - Correct tokenization for Mistral/Mixtral models
+# - Chat template formatting specific to Mistral architectures
+# - Required for optimal performance with Mistral-based models
+# - Function calling format handling for Mistral models
+mistral-common
+
+# ======================================================================================
+# SENTENCE-TRANSFORMERS - Semantic Text Embeddings
+# ======================================================================================
+# Sentence-transformers provides state-of-the-art models for generating dense vector
+# embeddings from text, optimized for semantic similarity tasks.
+#
+# WHY NEEDED:
+# - Generate high-quality embeddings for document chunks (RAG retrieval)
+# - Semantic similarity search in vector databases
+# - Pre-trained models optimized for various languages and domains
+# - Significantly better than basic word2vec or TF-IDF for semantic search
+# - Essential for the Small-to-Big chunking retrieval strategy
+#
+# RECOMMENDED MODELS:
+# - all-MiniLM-L6-v2: Fast, 384 dims, good quality (default)
+# - all-mpnet-base-v2: Slower, 768 dims, better quality
+# - bge-small-en-v1.5: Fast, 384 dims, excellent quality for English
 sentence-transformers
+
+# ======================================================================================
+# CHROMADB - Vector Database for RAG
+# ======================================================================================
+# ChromaDB is a lightweight, embedded vector database designed for AI applications
+# requiring semantic search over document collections.
+#
+# WHY NEEDED:
+# - Persistent storage for document embeddings (survives restarts)
+# - Efficient similarity search using HNSW index
+# - Metadata filtering for scoped searches (session-specific documents)
+# - Embedded database (no separate server needed)
+# - Built-in embedding function support
+# - Foundation for the RAG (Retrieval-Augmented Generation) system
 chromadb
+
+# ======================================================================================
+# BITSANDBYTES - Quantization Library
+# ======================================================================================
+# Bitsandbytes provides 8-bit and 4-bit quantization for PyTorch models, enabling
+# large models to run on consumer hardware.
+#
+# WHY NEEDED:
+# - Load large models (7B, 13B parameters) on limited VRAM
+# - 4-bit quantization (QLoRA) reduces memory by ~75%
+# - 8-bit quantization reduces memory by ~50% with minimal quality loss
+# - Essential for running transformers backend on GPUs with <24GB VRAM
+# - Integrated with transformers via BitsAndBytesConfig
 bitsandbytes
+
+# ======================================================================================
+# DDGS - DuckDuckGo Search (Free Web Search Tool)
+# ======================================================================================
+# DDGS provides Python bindings for DuckDuckGo search, enabling web search without
+# API keys or rate limits (within reasonable usage).
+#
+# WHY NEEDED:
+# - Free web search capability for agents (no API key required)
+# - Retrieve current information not in model training data
+# - News search for recent events and developments
+# - Image search capabilities
+# - Privacy-focused alternative to Google/Bing APIs
+# - No rate limiting for reasonable usage
 ddgs
+
+# ======================================================================================
+# SERPAPI - Premium Multi-Engine Web Search
+# ======================================================================================
+# SerpAPI provides programmatic access to Google, Bing, Yahoo, and other search engines
+# with structured, reliable results.
+#
+# WHY NEEDED:
+# - Production-grade search with Google's quality and coverage
+# - Structured data extraction (rich snippets, knowledge panels)
+# - News, images, videos, and shopping results
+# - Better reliability and result quality vs free alternatives
+# - API key required (100 free searches/month, paid tiers available)
+# - Recommended for production deployments requiring high-quality search
 serpapi
+
+# ======================================================================================
+# PYDANTIC AI - Type-Safe Agent Framework
+# ======================================================================================
+# Pydantic AI is a modern framework for building AI agents with type safety, validation,
+# and structured outputs using Pydantic models.
+#
+# WHY NEEDED:
+# - Build agentic workflows with tool calling and reasoning
+# - Type-safe tool definitions with automatic validation
+# - Structured output parsing with Pydantic models
+# - Dependency injection for clean agent architecture
+# - Streaming support for real-time responses
+# - Integration with multiple LLM providers (extended with LocalLLMModel)
+# - Essential for building production agents that reason across documents
 pydantic_ai
+
+# ======================================================================================
+# INSTALLATION NOTES
+# ======================================================================================
+#
+# BASIC INSTALLATION (most users):
+#   pip install -r requirements.txt
+#
+# FOR QWEN3/MISTRAL3 SUPPORT:
+#   1. Comment out the standard llama-cpp-python line
+#   2. Uncomment the appropriate custom wheel line for your Python version
+#   3. pip install -r requirements.txt
+#
+# FOR CUSTOM CUDA ARCHITECTURE:
+#   Build from source using the CMAKE_ARGS command above
+#
+# VERIFY INSTALLATION:
+#   python -c "import llama_cpp; print(llama_cpp.__version__)"
+#   python -c "import torch; print(torch.cuda.is_available())"
+#
+# ======================================================================================

@@ -39,56 +39,251 @@ PractorFlow is a production-ready, self-hosted AI service designed for real busi
 
 ## 🚀 Installation
 
+### Requirements
+
+- Python 3.10+
+- CUDA-capable GPU (optional, for GPU acceleration)
+
+### Basic Installation
+
 ```bash
 pip install -r requirements.txt
 ```
 
 The requirements.txt includes llama-cpp-python with CUDA 12.1 support. If you need a different CUDA version or CPU-only installation, modify the llama-cpp-python line in requirements.txt accordingly.
 
-## ⚙️ Configuration
+### Enabling Qwen3 and Mistral3 Support
 
-The library uses environment variables for configuration. Configuration is loaded from `config/options/options.env`:
+PractorFlow supports the latest Qwen3VL and Mistral3 models, which require a specialized build of llama-cpp-python.
+
+#### Why Special Support is Needed
+
+- The official llama-cpp-python releases do not yet include support for Qwen3VL and Mistral3 architectures
+- These newer models use updated attention mechanisms and vision encoders
+- Attempting to load these models with standard llama-cpp-python will result in unsupported architecture errors
+
+#### Installation Options
+
+**Option 1: Prebuilt Wheels (Recommended)**
+
+For Python 3.12 (CUDA 12.8, Linux/WSL2):
 
 ```bash
-# Logging Levels
+# Edit requirements.txt - comment out the standard llama-cpp-python line:
+# llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+
+# Uncomment this line:
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.18-cu128-AVX2-linux-20251220/llama_cpp_python-0.3.18-cp312-cp312-linux_x86_64.whl
+
+# Then install:
+pip install -r requirements.txt
+```
+
+For Python 3.10 (CUDA 12.8, Linux/WSL2):
+
+```bash
+# Use the Python 3.10 wheel instead:
+llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.18-cu128-AVX2-linux-20251220/llama_cpp_python-0.3.18-cp310-cp310-linux_x86_64.whl
+```
+
+**Option 2: Build from Source (Advanced)**
+
+If prebuilt wheels don't work for your system:
+
+1. Check your CUDA version:
+```bash
+nvcc --version
+```
+
+2. Determine your GPU compute capability:
+```bash
+nvidia-smi --query-gpu=compute_cap --format=csv
+```
+
+3. Build and install (replace '89' with your GPU's compute capability):
+```bash
+CMAKE_ARGS="-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89 -DCMAKE_CUDA_COMPILER=$(which nvcc)" \
+pip install git+https://github.com/JamePeng/llama-cpp-python.git --no-cache-dir
+```
+
+**Common GPU Compute Capabilities:**
+- RTX 4090/4080/4070/4060: 89
+- RTX 3090/3080/3070/3060: 86
+- RTX 2080 Ti/2080: 75
+- GTX 1080 Ti/1080: 61
+
+#### Verification
+
+After installation, verify the custom build:
+
+```bash
+# Check llama-cpp-python version
+python -c "import llama_cpp; print(f'llama-cpp-python version: {llama_cpp.__version__}')"
+
+# Check CUDA availability
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+
+# Test model loading (replace with your model path)
+python -c "
+from llama_cpp import Llama
+model = Llama(model_path='path/to/Qwen3VL-8B-Instruct-Q4_K_M.gguf', n_gpu_layers=-1)
+print('Model loaded successfully!')
+"
+```
+
+#### Troubleshooting
+
+**Error: "Unsupported architecture"**
+- Solution: Ensure you're using the custom llama-cpp-python wheel, not the standard version
+
+**Error: "CUDA out of memory"**
+- Reduce context window size (n_ctx) in your model configuration
+- Reduce GPU layers (n_gpu_layers) or use a smaller quantization
+- Close other GPU-intensive applications
+
+**Error: "Model loading takes too long"**
+- First load is always slower due to model download
+- Subsequent loads use cached models from `./models` directory
+- Consider using `pool.preload()` at server startup
+
+**Error: "ImportError: cannot import name 'Llama'"**
+- Reinstall llama-cpp-python:
+```bash
+pip uninstall llama-cpp-python
+pip install --no-cache-dir <wheel-url-or-build-command>
+```
+
+**Error: "CMAKE_CUDA_COMPILER not found"**
+- Install CUDA toolkit:
+```bash
+# Ubuntu/Debian
+sudo apt-get install nvidia-cuda-toolkit
+
+# Verify installation
+nvcc --version
+```
+
+#### Performance Tips
+
+1. **Quantization Selection:**
+   - Q4_K_M: Best balance of quality/speed (recommended)
+   - Q5_K_M: Slightly better quality, slower
+   - Q3_K_M: Faster, lower quality (good for testing)
+
+2. **Context Window:**
+   - Use smaller contexts (8192-16384) if you don't need full 32K
+   - Larger contexts consume more VRAM and slow inference
+
+3. **Batch Size:**
+   - Increase n_batch for faster prompt processing
+   - Decrease if you hit VRAM limits
+
+4. **GPU Layers:**
+   - Start with -1 (all layers on GPU)
+   - If VRAM limited, try 30-40 layers
+   - Monitor with `nvidia-smi` to find optimal balance
+
+#### Model Sources
+
+**Qwen3VL Models:**
+- [Qwen/Qwen3-VL-8B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)
+- Multimodal (text + vision) capabilities
+- 8B parameters, fits on 24GB GPU with Q4 quantization
+
+**Mistral3 Models:**
+- [mistralai/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF)
+- Text-only, improved architecture over Mistral 7B
+- 8B parameters, excellent quality/efficiency ratio
+
+#### Switching Back to Standard Models
+
+To revert to standard llama-cpp-python for other models:
+
+```bash
+# Edit requirements.txt - comment out custom wheel
+# Uncomment standard version:
+llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+
+# Reinstall:
+pip install --force-reinstall -r requirements.txt
+```
+
+#### Additional Resources
+
+- [llama.cpp GitHub](https://github.com/ggerganov/llama.cpp)
+- [Custom llama-cpp-python builds](https://github.com/JamePeng/llama-cpp-python)
+- [GGUF Model Hub](https://huggingface.co/models?search=gguf)
+- [Qwen Documentation](https://qwen.readthedocs.io/)
+- [Mistral Documentation](https://docs.mistral.ai/)
+
+**Note:** The custom llama-cpp-python builds are community-maintained until official support is merged. Always verify the source and use official releases when available for production deployments.
+
+## ⚙️ Configuration
+
+PractorFlow uses environment variables for configuration, loaded from three separate files in the `config/options/` directory:
+
+### Configuration Files
+
+#### 1. Logger Configuration (`config/options/logger.env`)
+
+Controls logging levels for different components:
+
+```bash
+# Logging Levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_RUNNER_LEVEL=INFO           # Runner component logging
 LOG_DOC_LEVEL=INFO              # Document processing logging
 LOG_KNOWLEDGE_LEVEL=INFO        # Knowledge store logging
 LOG_MODEL_POOL_LEVEL=INFO       # Model pool logging
 LOG_TOOL_LEVEL=INFO             # Tool execution logging
 LOG_AGENT_LEVEL=INFO            # Agent/Pydantic AI logging
+```
 
-# LLM Model Configuration
-LLM_MODEL=bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
-LLM_BACKEND=llama_cpp           # 'llama_cpp' or 'transformers'
-LLM_DEVICE=auto                 # 'auto', 'cuda', 'cpu', or specific device
-LLM_DTYPE=auto                  # 'auto', 'float32', 'float16', 'bfloat16', or None
-LLM_MAX_NEW_TOKENS=2048         # Maximum tokens to generate
-LLM_TEMPERATURE=0.7             # Sampling temperature (0.0-2.0)
-LLM_TOP_P=0.9                   # Nucleus sampling parameter
-LLM_MODELS_DIR=./models         # Directory for cached models
+#### 2. Model Configuration (`config/options/model.env`)
 
-# Llama.cpp Specific Settings
-LLM_GPU_LAYERS=-1               # Number of layers on GPU (-1 = all)
-LLM_N_CTX=32768                 # Context window size
-LLM_N_BATCH=2048                # Batch size for prompt processing
+Configures the LLM model and inference settings:
 
-# Transformers Specific Settings
-# LLM_QUANTIZATION=4bit         # Optional: '4bit' or '8bit' quantization
+```bash
+# Model Selection
+LLM_MODEL=bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf # Model name
+LLM_BACKEND=llama_cpp         # 'llama_cpp' or 'transformers'
+LLM_DEVICE=auto                  # 'auto', 'cuda', 'cpu', or specific device
+LLM_DTYPE=auto                   # 'auto', 'float32', 'float16', 'bfloat16', or None
+LLM_MAX_NEW_TOKENS=2048          # Maximum tokens to generate
+LLM_TEMPERATURE=0.7              # Sampling temperature (0.0-2.0)
+LLM_TOP_P=0.9                    # Nucleus sampling parameter
+LLM_MODELS_DIR=./models          # Directory for cached models
+
+# Llama.cpp Specific Settings (when LLM_BACKEND=llama_cpp)
+LLM_GPU_LAYERS=-1                # Number of layers on GPU (-1 = all)
+LLM_N_CTX=32768                  # Context window size
+LLM_N_BATCH=2048                 # Batch size for prompt processing
+
+# Transformers Specific Settings (when LLM_BACKEND=transformers)
+# LLM_QUANTIZATION=4bit            # Optional: '4bit' or '8bit' quantization
 
 # Generation Settings
 # LLM_STOP_TOKENS=</s>,<|endoftext|>  # Comma-separated stop tokens
-LLM_MAX_SEARCH_RESULTS=5        # Default results for knowledge search
+LLM_MAX_SEARCH_RESULTS=5         # Default results for knowledge search
+```
 
-# Knowledge Database Configuration (ChromaDB)
+#### 3. Knowledge Database Configuration (`config/options/knowledge.env`)
+
+Configures the ChromaDB-based knowledge store:
+
+```bash
+# Knowledge Database Type
 KB_TYPE=chromadb                           # Knowledge store type
+
+# ChromaDB Settings
 KB_CHROMA_PERSIST_DIRECTORY=./chroma_db   # Persistent storage location
 KB_CHROMA_RETRIEVE_COLLECTION=knowledge_retrieval  # Retrieval chunks collection
 KB_CHROMA_CONTEXT_COLLECTION=knowledge_context     # Context chunks collection
 KB_CHROMA_DOCUMENT_COLLECTION=knowledge_documents  # Documents collection
 KB_CHROMA_BATCH_SIZE=100                   # Batch size for operations
+
+# Embedding Model
 KB_CHROMA_EMBEDDING_MODEL=all-MiniLM-L6-v2  # SentenceTransformer model
-KB_CHROMA_EMBEDDING_MODEL_DIR=./models     # Embedding model cache directory
+KB_CHROMA_EMBEDDING_MODEL_DIR=./models      # Embedding model cache directory
 
 # Small-to-Big Chunking Strategy
 KB_CHROMA_RETRIEVAL_CHUNK_SIZE=128        # Small chunk size for retrieval
@@ -97,7 +292,48 @@ KB_CHROMA_CONTEXT_CHUNK_SIZE=1024         # Large chunk size for context
 KB_CHROMA_CONTEXT_CHUNK_OVERLAP=100       # Overlap for context chunks
 ```
 
-Copy `config/options/options.env` and modify values as needed for your setup.
+### Sample Model Configurations
+
+Sample configurations for various models are provided in `config/options/samples/models/`. You can use these as templates or copy them directly to `config/options/model.env`:
+
+**Available Sample Configurations:**
+
+1. **Qwen2-1.5B-Instruct-GGUF** (`model-Qwen2-1.5B-Instruct-GGUF.env`)
+   - Small, fast model for testing
+   - Backend: llama_cpp
+   - Quantization: Q4_K_M
+
+2. **Qwen2.5-7B** (`model-Qwen2.5-7B.env`)
+   - Balanced quality/performance
+   - Backend: transformers
+   - Quantization: 4bit
+
+3. **Qwen3-VL-8B-Instruct-GGUF** (`model-Qwen3-VL-8B-Instruct-GGUF.env`)
+   - Multimodal (text + vision)
+   - Backend: llama_cpp
+   - Requires custom llama-cpp-python build (see Installation section)
+
+4. **Ministral-3-8B-Instruct-2512-GGUF** (`model-Ministral-3-8B-Instruct-2512-GGUF.env`)
+   - Mistral's latest architecture
+   - Backend: llama_cpp
+   - Requires custom llama-cpp-python build (see Installation section)
+
+5. **GPT-OSS-20B** (`model-gpt-oss-20b.env`)
+   - Large open-source model
+   - Backend: transformers
+   - Quantization: 4bit
+   - Requires significant resources
+
+**Using Sample Configurations:**
+
+To use a sample configuration, copy it to your active model configuration file:
+
+```bash
+# Example: Use Qwen2.5-7B configuration
+cp config/options/samples/models/model-Qwen2.5-7B.env config/options/model.env
+```
+
+Or manually copy the contents into `config/options/model.env` and modify as needed.
 
 ## 🎯 Quick Start
 
@@ -234,7 +470,7 @@ python sample.py path/to/document.pdf
 python pyai-examples.py
 ```
 
-## 🏗️ Architecture
+## 🗃️ Architecture
 
 ### Core Components
 
@@ -415,7 +651,7 @@ Please read our [CONTRIBUTING.md](CONTRIBUTING.md) for:
 
 For major changes, please open an issue first to discuss what you would like to change.
 
-## 📝 License
+## 📄 License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 

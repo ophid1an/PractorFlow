@@ -20,13 +20,11 @@ from llm.knowledge import ChromaKnowledgeStore, ChromaKnowledgeStoreConfig
 from llm.pyai import LocalLLMModel, KnowledgeDeps, search_knowledge
 from llm.tools.base_web_search import DuckDuckGoSearchTool
 from llm.tools.serpapi_web_search import SerpAPISearchTool
+from settings.app_settings import appConfiguration
 
-
-# example_model_name = "Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf"
-# example_model_name = "bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-example_model_name = "Qwen/Qwen3-VL-8B-Instruct-GGUF/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
-backend_runner="llama_cpp"
-example_model_name = "mistralai/Ministral-3-8B-Instruct-2512-GGUF/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf.gguf"
+config = appConfiguration.ModelConfiguration
+backend_runner=config.backend
+example_model_name = config.model_name
 # =============================================================================
 # Example 1: Basic Usage - Simple Agent (No Tools)
 # =============================================================================

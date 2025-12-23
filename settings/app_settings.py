@@ -6,8 +6,10 @@ from dotenv import load_dotenv
 from llm.knowledge.chroma_knowledge_config import ChromaKnowledgeStoreConfig
 from llm.llm_config import LLMConfig
 
-load_dotenv(dotenv_path="config/options/options.env", override=True)
-
+# Load Configurations
+load_dotenv(dotenv_path="config/options/logger.env", override=True)
+load_dotenv(dotenv_path="config/options/model.env", override=True)
+load_dotenv(dotenv_path="config/options/knowledge.env", override=True)
 
 def parse_list_string(value: Optional[str]) -> Optional[List[str]]:
     if value is None:
