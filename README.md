@@ -264,6 +264,33 @@ LLM_N_BATCH=2048                 # Batch size for prompt processing
 # Generation Settings
 # LLM_STOP_TOKENS=</s>,<|endoftext|>  # Comma-separated stop tokens
 LLM_MAX_SEARCH_RESULTS=5         # Default results for knowledge search
+
+# =============================================================================
+# Transformers Backend Optimizations
+# =============================================================================
+# These settings only apply when LLM_BACKEND=transformers
+# They are ignored for llama_cpp backend (GGUF models)
+
+# Enable torch.compile() for faster inference (PyTorch 2.0+)
+# Compiles the model into optimized kernels for your GPU
+# First inference triggers JIT compilation, subsequent calls are faster
+# Set to "false" to disable (useful for debugging or unsupported models)
+# Default: true
+# LLM_USE_TORCH_COMPILE=true
+
+# torch.compile() optimization mode
+# - "default"         : Fast compile (~10s), decent runtime speed
+# - "reduce-overhead" : Balanced compile (~30s), good runtime speed (recommended)
+# - "max-autotune"    : Slow compile (~3-5min), fastest runtime speed
+# Default: reduce-overhead
+# LLM_COMPILE_MODE=reduce-overhead
+
+# Run warmup inference immediately after model loading
+# Triggers JIT compilation during startup instead of on first request
+# Improves first request latency at the cost of longer startup time
+# Set to "false" if you prefer faster startup over first-request latency
+# Default: true
+# LLM_WARMUP_ON_LOAD=true
 ```
 
 #### 3. Knowledge Database Configuration (`config/options/knowledge.env`)

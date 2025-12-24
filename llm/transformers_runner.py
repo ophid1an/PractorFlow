@@ -18,7 +18,7 @@ logger = get_logger(
 
 
 class TransformersRunner(LLMRunner):
-    """Async runner for HuggingFace Transformers models."""
+    """Async runner for HuggingFace Transformers models with optimizations."""
 
     def __init__(
         self, handle: ModelHandle, knowledge_store: Optional[KnowledgeStore] = None
@@ -28,11 +28,14 @@ class TransformersRunner(LLMRunner):
 
         super().__init__(handle, knowledge_store)
 
-        # Determine device
         if hasattr(self.model, "device"):
             self._device = self.model.device
         else:
             self._device = next(self.model.parameters()).device
+
+        # Pre-compute generation defaults to avoid repeated attribute access
+        self._pad_token_id = self.tokenizer.pad_token_id
+        self._eos_token_id = self.tokenizer.eos_token_id
 
         logger.info(
             f"[TransformersRunner] Initialized with pooled model: {self.model_name}"
@@ -42,35 +45,52 @@ class TransformersRunner(LLMRunner):
     def supports_function_calling(self) -> bool:
         """
         Check if the transformers model supports native function calling.
-        
+
         Returns:
             True if model supports native function calling, False otherwise
         """
         try:
-            if self.tokenizer and hasattr(self.tokenizer, 'chat_template'):
+            if self.tokenizer and hasattr(self.tokenizer, "chat_template"):
                 chat_template = self.tokenizer.chat_template
                 if chat_template:
                     template_lower = str(chat_template).lower()
-                    if any(keyword in template_lower for keyword in [
-                        'tool', 'function', '<tool_call>', '<function_call>',
-                        'tools', 'functions', 'tool_use', 'function_use'
-                    ]):
-                        logger.info(f"[TransformersRunner] Model supports function calling (detected in chat template)")
+                    if any(
+                        keyword in template_lower
+                        for keyword in [
+                            "tool",
+                            "function",
+                            "<tool_call>",
+                            "<function_call>",
+                            "tools",
+                            "functions",
+                            "tool_use",
+                            "function_use",
+                        ]
+                    ):
+                        logger.info(
+                            f"[TransformersRunner] Model supports function calling (detected in chat template)"
+                        )
                         return True
-            
-            if hasattr(self.model, 'config'):
+
+            if hasattr(self.model, "config"):
                 config = self.model.config
-                if hasattr(config, 'to_dict'):
+                if hasattr(config, "to_dict"):
                     config_dict = config.to_dict()
-                    if config_dict.get('supports_function_calling', False):
-                        logger.info(f"[TransformersRunner] Model supports function calling (config flag)")
+                    if config_dict.get("supports_function_calling", False):
+                        logger.info(
+                            f"[TransformersRunner] Model supports function calling (config flag)"
+                        )
                         return True
-            
-            logger.info(f"[TransformersRunner] Model does NOT support native function calling")
+
+            logger.info(
+                f"[TransformersRunner] Model does NOT support native function calling"
+            )
             return False
-            
+
         except Exception as e:
-            logger.warning(f"[TransformersRunner] Error detecting function calling support: {e}")
+            logger.warning(
+                f"[TransformersRunner] Error detecting function calling support: {e}"
+            )
             return False
 
     def _build_chat_messages(
@@ -89,11 +109,9 @@ class TransformersRunner(LLMRunner):
         chat_messages = []
         system_parts = []
 
-        # Add custom instructions first
         if instructions:
             system_parts.append(instructions)
 
-        # Add context with clear instructions for the model to use it
         if context:
             system_parts.append(
                 "You have access to the following REFERENCE DOCUMENTS. "
@@ -112,7 +130,6 @@ class TransformersRunner(LLMRunner):
             for msg in messages:
                 chat_messages.append({"role": msg["role"], "content": msg["content"]})
         else:
-            # When context is provided, remind the model to use it
             user_content = prompt
             if context:
                 user_content = f"{prompt}\n\n(Answer based on the reference documents provided above.)"
@@ -154,6 +171,7 @@ class TransformersRunner(LLMRunner):
         else:
             input_text = self._format_messages_fallback(chat_messages)
 
+        # Tokenize and move to device in one step
         inputs = self.tokenizer(
             input_text,
             return_tensors="pt",
@@ -163,11 +181,39 @@ class TransformersRunner(LLMRunner):
                 if self.max_context_length
                 else None
             ),
-        ).to(self._device)
+        ).to(self._device, non_blocking=True)
 
         input_length = inputs["input_ids"].shape[1]
 
         return inputs, input_length
+
+    def _build_generation_kwargs(
+        self,
+        inputs: Dict[str, torch.Tensor],
+        temperature: float,
+        top_p: float,
+        streamer: Optional[TextIteratorStreamer] = None,
+    ) -> Dict[str, Any]:
+        """Build generation kwargs dict to avoid repetition."""
+        do_sample = temperature > 0
+
+        gen_kwargs = {
+            **inputs,
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": self._pad_token_id,
+            "eos_token_id": self._eos_token_id,
+        }
+
+        # Only include sampling params when do_sample=True
+        if do_sample:
+            gen_kwargs["temperature"] = temperature
+            gen_kwargs["top_p"] = top_p
+
+        if streamer is not None:
+            gen_kwargs["streamer"] = streamer
+
+        return gen_kwargs
 
     def _generate_sync(
         self,
@@ -177,19 +223,10 @@ class TransformersRunner(LLMRunner):
         top_p: float,
     ) -> tuple:
         """Synchronous generation - runs in thread pool."""
-        gen_kwargs = {
-            "max_new_tokens": self.max_new_tokens,
-            "do_sample": temperature > 0,
-            "pad_token_id": self.tokenizer.pad_token_id,
-            "eos_token_id": self.tokenizer.eos_token_id,
-        }
-
-        if temperature > 0:
-            gen_kwargs["temperature"] = temperature
-            gen_kwargs["top_p"] = top_p
+        gen_kwargs = self._build_generation_kwargs(inputs, temperature, top_p)
 
         with torch.inference_mode():
-            outputs = self.model.generate(**inputs, **gen_kwargs)
+            outputs = self.model.generate(**gen_kwargs)
 
         generated_tokens = outputs[0][input_length:]
         response_text = self.tokenizer.decode(
@@ -210,7 +247,7 @@ class TransformersRunner(LLMRunner):
     ) -> Dict[str, Any]:
         """
         Async generate with optional context from prior search() call.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content' keys
             prompt: Single prompt string (alternative to messages)
@@ -218,16 +255,16 @@ class TransformersRunner(LLMRunner):
             temperature: Sampling temperature (uses config default if None)
             top_p: Nucleus sampling parameter (uses config default if None)
             tools: Optional list of tool definitions (not used in transformers backend currently)
-            
+
         Returns:
             Dictionary with reply, latency_seconds, usage, and optionally context info
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
 
-        # Note: tools parameter is accepted for interface compatibility but
-        # transformers backend doesn't have native tool calling support yet
         if tools:
-            logger.warning("[TransformersRunner] Native tool calling not implemented for transformers backend, tools will be ignored")
+            logger.warning(
+                "[TransformersRunner] Native tool calling not implemented for transformers backend, tools will be ignored"
+            )
 
         context = self._consume_pending_context()
         context_metadata = None
@@ -250,13 +287,12 @@ class TransformersRunner(LLMRunner):
             messages, prompt, instructions, context
         )
 
-        # Run blocking inference in thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         response_text, completion_tokens = await loop.run_in_executor(
             None, self._generate_sync, inputs, input_length, temp, tp
         )
 
-        latency = time.time() - start_time
+        latency = time.perf_counter() - start_time
 
         response = {
             "reply": response_text,
@@ -287,7 +323,7 @@ class TransformersRunner(LLMRunner):
     ) -> AsyncIterator[StreamChunk]:
         """
         Async streaming generation using TextIteratorStreamer.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content' keys
             prompt: Single prompt string (alternative to messages)
@@ -295,15 +331,16 @@ class TransformersRunner(LLMRunner):
             temperature: Sampling temperature (uses config default if None)
             top_p: Nucleus sampling parameter (uses config default if None)
             tools: Optional list of tool definitions (not used in transformers backend currently)
-            
+
         Yields:
             StreamChunk objects with text deltas and final metadata
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
 
-        # Note: tools parameter is accepted for interface compatibility
         if tools:
-            logger.warning("[TransformersRunner] Native tool calling not implemented for transformers backend, tools will be ignored")
+            logger.warning(
+                "[TransformersRunner] Native tool calling not implemented for transformers backend, tools will be ignored"
+            )
 
         context = self._consume_pending_context()
         context_metadata = None
@@ -326,86 +363,80 @@ class TransformersRunner(LLMRunner):
             messages, prompt, instructions, context
         )
 
-        # Create async queue to bridge sync streamer to async
-        queue: asyncio.Queue[Optional[StreamChunk]] = asyncio.Queue()
-        loop = asyncio.get_event_loop()
-
-        # Create streamer
+        # Create streamer with skip_prompt to avoid re-emitting input
         streamer = TextIteratorStreamer(
             self.tokenizer, skip_prompt=True, skip_special_tokens=True
         )
 
-        def stream_in_thread():
-            """Run streaming generation in thread, put chunks in queue."""
+        gen_kwargs = self._build_generation_kwargs(inputs, temp, tp, streamer)
+
+        # Track generated tokens via output length after generation
+        generation_complete = asyncio.Event()
+        generation_error: Optional[Exception] = None
+        output_ids: Optional[torch.Tensor] = None
+
+        def generate_in_thread():
+            nonlocal generation_error, output_ids
             try:
-                gen_kwargs = {
-                    **inputs,
-                    "max_new_tokens": self.max_new_tokens,
-                    "do_sample": temp > 0,
-                    "pad_token_id": self.tokenizer.pad_token_id,
-                    "eos_token_id": self.tokenizer.eos_token_id,
-                    "streamer": streamer,
-                }
-
-                if temp > 0:
-                    gen_kwargs["temperature"] = temp
-                    gen_kwargs["top_p"] = tp
-
-                generated_token_count = 0
-
-                # Start generation in background thread
-                def generate_thread():
-                    with torch.inference_mode():
-                        self.model.generate(**gen_kwargs)
-
-                gen_thread = Thread(target=generate_thread)
-                gen_thread.start()
-
-                # Iterate streamer and put chunks in queue
-                for text in streamer:
-                    if text:
-                        generated_token_count += len(
-                            self.tokenizer.encode(text, add_special_tokens=False)
-                        )
-                        chunk = StreamChunk(text=text, finished=False)
-                        asyncio.run_coroutine_threadsafe(
-                            queue.put(chunk), loop
-                        ).result()
-
-                gen_thread.join()
-
-                # Put final chunk
-                latency = time.time() - start_time
-                final_chunk = StreamChunk(
-                    text="",
-                    finished=True,
-                    finish_reason="stop",
-                    latency_seconds=latency,
-                    usage={
-                        "prompt_tokens": input_length,
-                        "completion_tokens": generated_token_count,
-                        "total_tokens": input_length + generated_token_count,
-                    },
-                    context_used=context,
-                    search_metadata=context_metadata,
-                )
-                asyncio.run_coroutine_threadsafe(queue.put(final_chunk), loop).result()
-
+                with torch.inference_mode():
+                    outputs = self.model.generate(**gen_kwargs)
+                    output_ids = outputs[0]
             except Exception as e:
-                error_chunk = StreamChunk(
-                    text="", finished=True, finish_reason=f"error: {str(e)}"
-                )
-                asyncio.run_coroutine_threadsafe(queue.put(error_chunk), loop).result()
+                generation_error = e
             finally:
-                # Signal end of stream
-                asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+                generation_complete.set()
 
-        # Start streaming in thread
-        loop.run_in_executor(None, stream_in_thread)
+        # Start generation thread
+        thread = Thread(target=generate_in_thread, daemon=True)
+        thread.start()
 
-        # Yield chunks from queue
+        # Stream tokens from streamer
+        loop = asyncio.get_running_loop()
+
+        def get_next_token():
+            """Blocking call to get next token from streamer."""
+            try:
+                return next(iter(streamer))
+            except StopIteration:
+                return None
+
         while True:
-            chunk = await queue.get()
-            if chunk is None:
+            # Get next text chunk from streamer (blocking in thread pool)
+            text = await loop.run_in_executor(None, get_next_token)
+
+            if text is None:
                 break
-            yield chunk
+
+            if text:
+                yield StreamChunk(text=text, finished=False)
+
+        # Wait for generation to complete
+        await generation_complete.wait()
+
+        # Calculate final stats
+        latency = time.perf_counter() - start_time
+
+        completion_tokens = 0
+        if output_ids is not None:
+            completion_tokens = len(output_ids) - input_length
+
+        # Yield final chunk with metadata
+        final_chunk = StreamChunk(
+            text="",
+            finished=True,
+            finish_reason="error" if generation_error else "stop",
+            latency_seconds=latency,
+            usage={
+                "prompt_tokens": input_length,
+                "completion_tokens": completion_tokens,
+                "total_tokens": input_length + completion_tokens,
+            },
+            context_used=context,
+            search_metadata=context_metadata,
+        )
+
+        if generation_error:
+            logger.error(f"[TransformersRunner] Generation error: {generation_error}")
+            final_chunk.finish_reason = f"error: {str(generation_error)}"
+
+        yield final_chunk

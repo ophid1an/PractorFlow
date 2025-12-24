@@ -87,6 +87,9 @@ class AppConfig:
             backend=os.getenv("LLM_BACKEND", "llama_cpp"),
             stop_tokens=parse_list_string(os.getenv("LLM_STOP_TOKENS")),
             max_search_results=int(os.getenv("LLM_MAX_SEARCH_RESULTS", "5")),
+            compile_mode=os.getenv("LLM_COMPILE_MODE", "reduce-overhead"),
+            use_torch_compile=os.getenv("LLM_USE_TORCH_COMPILE", "true").lower() == "true",
+            warmup_on_load=os.getenv("LLM_WARMUP_ON_LOAD", "true").lower() == "true",
         )
     )
     KnowledgeChromaConfiguration: Optional[ChromaKnowledgeStoreConfig] = field(

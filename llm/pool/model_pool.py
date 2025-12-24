@@ -15,6 +15,9 @@ import os
 from contextlib import asynccontextmanager
 from typing import Dict, Optional, AsyncIterator
 
+import torch
+from transformers import GenerationConfig
+
 from llm.llm_config import LLMConfig
 from llm.pool.model_handle import ModelHandle
 
@@ -24,7 +27,8 @@ from settings.app_settings import appConfiguration
 logger = get_logger(
     "model_pool", level=appConfiguration.LoggerConfiguration.ModelPoolLevel
 )
-verbose_runner = appConfiguration.LoggerConfiguration.RunnerLevel=="DEBUG"
+verbose_runner = appConfiguration.LoggerConfiguration.RunnerLevel == "DEBUG"
+
 
 class ModelPool:
     """
@@ -72,7 +76,6 @@ class ModelPool:
 
     def _compute_config_hash(self, config: LLMConfig) -> str:
         """Compute hash from config for cache key."""
-        # Include only fields that affect model loading
         key_fields = {
             "model_name": config.model_name,
             "backend": config.backend,
@@ -82,6 +85,8 @@ class ModelPool:
             "n_gpu_layers": config.n_gpu_layers,
             "n_ctx": config.n_ctx,
             "n_batch": config.n_batch,
+            "use_torch_compile": getattr(config, "use_torch_compile", False),
+            "compile_mode": getattr(config, "compile_mode", "default"),
         }
         key_str = json.dumps(key_fields, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()
@@ -100,7 +105,6 @@ class ModelPool:
         Returns:
             True if a model was evicted, False otherwise
         """
-        # Find LRU model not in use
         lru_hash = None
         lru_time = None
 
@@ -114,13 +118,11 @@ class ModelPool:
         if lru_hash is None:
             return False
 
-        # Evict
         handle = self._models.pop(lru_hash)
         logger.info(
             f"[ModelPool] Evicted model: {handle.config.model_name} (hash: {lru_hash[:8]}...)"
         )
 
-        # Cleanup
         del handle.model
         if handle.tokenizer:
             del handle.tokenizer
@@ -134,10 +136,8 @@ class ModelPool:
 
         os.makedirs(config.models_dir, exist_ok=True)
 
-        # Resolve model path
         model_path = None
         filename = os.path.basename(config.model_name)
-        # Search in models_dir
         for dirpath, _, filenames in os.walk(config.models_dir):
             if filename in filenames:
                 model_path = os.path.join(dirpath, filename)
@@ -160,7 +160,6 @@ class ModelPool:
         if not os.path.isfile(model_path):
             raise ValueError(f"[ModelPool] Model path is not a file: {model_path}")
 
-        # Validate GGUF
         with open(model_path, "rb") as f:
             magic = f.read(4)
         if magic != b"GGUF":
@@ -195,16 +194,114 @@ class ModelPool:
             config_hash=config_hash,
         )
 
+    def _compile_model(self, model, config: LLMConfig):
+        """
+        Apply torch.compile() to the model for faster inference.
+        
+        Args:
+            model: The transformers model to compile
+            config: LLM configuration
+            
+        Returns:
+            Compiled model or original if compilation fails
+        """
+        use_compile = getattr(config, "use_torch_compile", True)
+        compile_mode = getattr(config, "compile_mode", "reduce-overhead")
+        
+        if not use_compile:
+            logger.info("[ModelPool] torch.compile() disabled by config")
+            return model
+        
+        torch_version = tuple(map(int, torch.__version__.split("+")[0].split(".")[:2]))
+        if torch_version < (2, 0):
+            logger.warning(
+                f"[ModelPool] torch.compile() requires PyTorch 2.0+, "
+                f"found {torch.__version__}"
+            )
+            return model
+        
+        if not torch.cuda.is_available():
+            logger.info("[ModelPool] CUDA not available, skipping torch.compile()")
+            return model
+        
+        try:
+            logger.info(f"[ModelPool] Compiling model with mode='{compile_mode}'...")
+            
+            compiled_model = torch.compile(
+                model,
+                mode=compile_mode,
+                fullgraph=False,
+                dynamic=True,
+            )
+            
+            logger.info("[ModelPool] Model compiled successfully")
+            return compiled_model
+            
+        except Exception as e:
+            logger.warning(f"[ModelPool] torch.compile() failed: {e}")
+            logger.warning("[ModelPool] Falling back to eager mode")
+            return model
+
+    def _warmup_model(self, model, tokenizer, device, config: LLMConfig) -> None:
+        """
+        Run warmup inference to trigger JIT compilation.
+        
+        This ensures the first real request doesn't pay the compilation cost.
+        
+        Args:
+            model: The loaded model
+            tokenizer: The tokenizer
+            device: Device the model is on
+            config: LLM configuration for generation parameters
+        """
+        logger.info("[ModelPool] Running warmup inference...")
+        
+        try:
+            warmup_text = "Hello, how are you?"
+            
+            inputs = tokenizer(
+                warmup_text,
+                return_tensors="pt",
+                padding=True,
+            ).to(device)
+            
+            do_sample = config.temperature > 0
+            
+            gen_config_kwargs = {
+                "max_new_tokens": min(config.max_new_tokens, 10),  # Limit warmup tokens
+                "do_sample": do_sample,
+                "pad_token_id": tokenizer.pad_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
+            }
+            
+            if do_sample:
+                gen_config_kwargs["temperature"] = config.temperature
+                gen_config_kwargs["top_p"] = config.top_p
+            
+            warmup_gen_config = GenerationConfig(**gen_config_kwargs)
+            
+            with torch.inference_mode():
+                _ = model.generate(
+                    **inputs,
+                    generation_config=warmup_gen_config,
+                )
+            
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            
+            logger.info("[ModelPool] Warmup complete")
+            
+        except Exception as e:
+            logger.warning(f"[ModelPool] Warmup failed (non-fatal): {e}")
+
     def _load_transformers_model(self, config: LLMConfig) -> ModelHandle:
-        """Load a transformers model."""
-        import torch
+        """Load a transformers model with optimizations."""
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         os.makedirs(config.models_dir, exist_ok=True)
 
         logger.info(f"[ModelPool] Loading transformers model: {config.model_name}")
 
-        # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
             config.model_name,
             cache_dir=config.models_dir,
@@ -214,7 +311,6 @@ class ModelPool:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # Build model kwargs
         model_kwargs = {
             "cache_dir": config.models_dir,
             "trust_remote_code": True,
@@ -230,7 +326,6 @@ class ModelPool:
         elif config.device != "cpu":
             model_kwargs["device_map"] = config.device
 
-        # Handle quantization using modern BitsAndBytesConfig
         if config.quantization:
             try:
                 from transformers import BitsAndBytesConfig
@@ -259,8 +354,18 @@ class ModelPool:
 
         model.eval()
 
-        # Get context length
-        if hasattr(model.config, "max_position_embeddings"):
+        if hasattr(model, "device"):
+            device = model.device
+        else:
+            device = next(model.parameters()).device
+
+        model = self._compile_model(model, config)
+
+        warmup_on_load = getattr(config, "warmup_on_load", True)
+        if warmup_on_load and getattr(config, "use_torch_compile", True):
+            self._warmup_model(model, tokenizer, device, config)
+
+        if hasattr(model, "config") and hasattr(model.config, "max_position_embeddings"):
             max_ctx = model.config.max_position_embeddings
         else:
             max_ctx = config.n_ctx
@@ -278,7 +383,7 @@ class ModelPool:
 
     async def _load_model(self, config: LLMConfig) -> ModelHandle:
         """Load model in thread pool to avoid blocking."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if config.backend == "llama_cpp":
             handle = await loop.run_in_executor(
@@ -308,7 +413,6 @@ class ModelPool:
         """
         config_hash = self._compute_config_hash(config)
 
-        # Check cache first
         async with self._lock:
             if config_hash in self._models:
                 handle = self._models[config_hash]
@@ -318,18 +422,15 @@ class ModelPool:
                 )
                 return handle
 
-        # Need to load - get loading lock for this config
         loading_lock = await self._get_loading_lock(config_hash)
 
         async with loading_lock:
-            # Double-check cache after acquiring loading lock
             async with self._lock:
                 if config_hash in self._models:
                     handle = self._models[config_hash]
                     handle.acquire()
                     return handle
 
-                # Check if we need to evict
                 while len(self._models) >= self.max_models:
                     evicted = await self._evict_lru()
                     if not evicted:
@@ -338,11 +439,9 @@ class ModelPool:
                             f"reached and all models are in use"
                         )
 
-            # Load model (outside lock to allow concurrent requests for different models)
             logger.info(f"[ModelPool] Loading new model: {config.model_name}")
             handle = await self._load_model(config)
 
-            # Add to cache
             async with self._lock:
                 self._models[config_hash] = handle
                 handle.acquire()

@@ -15,7 +15,7 @@ from typing import Optional, Set
 from pydantic_ai import Agent, RunContext
 
 # Local LLM imports
-from llm import LLMConfig, ModelPool, create_runner
+from llm import ModelPool, create_runner
 from llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore
 from llm.knowledge.chroma_knowledge_config import ChromaKnowledgeStoreConfig
 from llm.pyai import LocalLLMModel, KnowledgeDeps, search_knowledge
@@ -23,9 +23,10 @@ from llm.tools.base_web_search import DuckDuckGoSearchTool
 from llm.tools.serpapi_web_search import SerpAPISearchTool
 from settings.app_settings import appConfiguration
 
+# Use the centralized configuration
 config = appConfiguration.ModelConfiguration
-backend_runner=config.backend
-example_model_name = config.model_name
+
+
 # =============================================================================
 # Example 1: Basic Usage - Simple Agent (No Tools)
 # =============================================================================
@@ -40,12 +41,6 @@ async def example_basic_usage():
     print("=" * 60)
     print("Example 1: Basic Usage")
     print("=" * 60)
-
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-        temperature=0.7,
-    )
 
     pool = ModelPool.get_instance(max_models=1)
 
@@ -90,13 +85,6 @@ async def example_rag_with_tool():
         embedding_model_name="all-MiniLM-L6-v2",
     )
     knowledge_store = ChromaKnowledgeStore(kb_config)
-
-    # LLM config
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-        temperature=0.3,
-    )
 
     pool = ModelPool.get_instance(max_models=1)
 
@@ -166,11 +154,6 @@ async def example_scoped_search():
     session_document_ids = {doc["id"] for doc in documents[:2]}
     print(f"Scoping search to documents: {session_document_ids}")
 
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-    )
-
     pool = ModelPool.get_instance()
 
     async with pool.acquire_context(config) as handle:
@@ -235,11 +218,6 @@ async def example_streaming():
     print("Example 4: Streaming Response")
     print("=" * 60)
 
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-    )
-
     pool = ModelPool.get_instance()
 
     async with pool.acquire_context(config) as handle:
@@ -282,11 +260,6 @@ async def example_conversation():
     print("Example 5: Conversation with History")
     print("=" * 60)
 
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-    )
-
     pool = ModelPool.get_instance()
 
     async with pool.acquire_context(config) as handle:
@@ -298,12 +271,10 @@ async def example_conversation():
             system_prompt="You are a helpful coding assistant.",
         )
 
-        # First turn
         result1 = await agent.run("How do I read a file in Python?")
         print(f"User: How do I read a file in Python?")
         print(f"Assistant: {result1.output}\n")
 
-        # Second turn - continues conversation
         result2 = await agent.run(
             "How do I handle errors in that code?",
             message_history=result1.all_messages(),
@@ -332,12 +303,6 @@ async def example_multiple_tools():
 
     kb_config = ChromaKnowledgeStoreConfig(persist_directory="./chroma_db")
     knowledge_store = ChromaKnowledgeStore(kb_config)
-
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-        temperature=0.3,
-    )
 
     pool = ModelPool.get_instance()
 
@@ -375,7 +340,7 @@ async def example_multiple_tools():
                 return "No relevant documents found."
             return format_search_results(results, query)
 
-        # Register calculator tool (plain tool - no ctx needed)
+        # Register calculator tool
         @agent.tool_plain
         def calculate(expression: str) -> str:
             """Evaluate a mathematical expression safely.
@@ -426,12 +391,6 @@ async def example_web_search_duckduckgo():
     class WebSearchDeps:
         web_search_tool: DuckDuckGoSearchTool
 
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-        temperature=0.3,
-    )
-
     pool = ModelPool.get_instance(max_models=1)
 
     async with pool.acquire_context(config) as handle:
@@ -469,7 +428,7 @@ async def example_web_search_duckduckgo():
                 return "No results found for the query."
             else:
                 return f"Search error: {result.error}"
-
+            
         # Create dependencies
         deps = WebSearchDeps(web_search_tool=DuckDuckGoSearchTool())
 
@@ -507,12 +466,6 @@ async def example_web_search_serpapi():
     @dataclass
     class SerpAPISearchDeps:
         web_search_tool: SerpAPISearchTool
-
-    config = LLMConfig(
-        model_name=example_model_name,
-        backend=backend_runner,
-        temperature=0.3,
-    )
 
     pool = ModelPool.get_instance(max_models=1)
 
@@ -581,6 +534,7 @@ async def example_web_search_serpapi():
             country="us",
             language="en",
         )
+
         deps = SerpAPISearchDeps(web_search_tool=serp_tool)
 
         result = await agent.run(
@@ -600,12 +554,12 @@ async def run_all_examples():
     examples = [
         ("Basic Usage", example_basic_usage),
         ("RAG with Tool", example_rag_with_tool),
-        ("Scoped Search", example_scoped_search),
-        ("Streaming", example_streaming),
-        ("Conversation", example_conversation),
-        ("Multiple Tools", example_multiple_tools),
-        ("Web Search DuckDuckGo", example_web_search_duckduckgo),
-        ("Web Search SerpAPI", example_web_search_serpapi),
+        # ("Scoped Search", example_scoped_search),
+        # ("Streaming", example_streaming),
+        # ("Conversation", example_conversation),
+        # ("Multiple Tools", example_multiple_tools),
+        # ("Web Search DuckDuckGo", example_web_search_duckduckgo),
+        # ("Web Search SerpAPI", example_web_search_serpapi),
     ]
 
     for name, example_fn in examples:

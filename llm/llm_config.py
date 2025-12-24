@@ -41,3 +41,8 @@ class LLMConfig:
 
     # Knowledge search settings
     max_search_results: int = 5
+
+    # Transformers optimization settings (speed over memory)
+    use_torch_compile: bool = True  # Enable torch.compile() for faster inference
+    compile_mode: str = "reduce-overhead"  # "default", "reduce-overhead", "max-autotune"
+    warmup_on_load: bool = True  # Run warmup inference after loading
