@@ -143,7 +143,7 @@ print('Model loaded successfully!')
 
 **Error: "Model loading takes too long"**
 - First load is always slower due to model download
-- Subsequent loads use cached models from `./models` directory
+- Subsequent loads use cached models from `../models` directory
 - Consider using `pool.preload()` at server startup
 
 **Error: "ImportError: cannot import name 'Llama'"**
@@ -251,7 +251,7 @@ LLM_DTYPE=auto                   # 'auto', 'float32', 'float16', 'bfloat16', or 
 LLM_MAX_NEW_TOKENS=2048          # Maximum tokens to generate
 LLM_TEMPERATURE=0.7              # Sampling temperature (0.0-2.0)
 LLM_TOP_P=0.9                    # Nucleus sampling parameter
-LLM_MODELS_DIR=./models          # Directory for cached models
+LLM_MODELS_DIR=../models          # Directory for cached models
 
 # Llama.cpp Specific Settings (when LLM_BACKEND=llama_cpp)
 LLM_GPU_LAYERS=-1                # Number of layers on GPU (-1 = all)
@@ -302,7 +302,7 @@ Configures the ChromaDB-based knowledge store:
 KB_TYPE=chromadb                           # Knowledge store type
 
 # ChromaDB Settings
-KB_CHROMA_PERSIST_DIRECTORY=./chroma_db   # Persistent storage location
+KB_CHROMA_PERSIST_DIRECTORY=../chroma_db   # Persistent storage location
 KB_CHROMA_RETRIEVE_COLLECTION=knowledge_retrieval  # Retrieval chunks collection
 KB_CHROMA_CONTEXT_COLLECTION=knowledge_context     # Context chunks collection
 KB_CHROMA_DOCUMENT_COLLECTION=knowledge_documents  # Documents collection
@@ -310,7 +310,7 @@ KB_CHROMA_BATCH_SIZE=100                   # Batch size for operations
 
 # Embedding Model
 KB_CHROMA_EMBEDDING_MODEL=all-MiniLM-L6-v2  # SentenceTransformer model
-KB_CHROMA_EMBEDDING_MODEL_DIR=./models      # Embedding model cache directory
+KB_CHROMA_EMBEDDING_MODEL_DIR=../models      # Embedding model cache directory
 
 # Small-to-Big Chunking Strategy
 KB_CHROMA_RETRIEVAL_CHUNK_SIZE=128        # Small chunk size for retrieval
@@ -368,8 +368,8 @@ Or manually copy the contents into `config/options/model.env` and modify as need
 
 ```python
 import asyncio
-from llm import ModelPool, create_runner
-from settings.app_settings import appConfiguration
+from practorflow.llm import ModelPool, create_runner
+from practorflow.settings.app_settings import appConfiguration
 
 async def main():
     config = appConfiguration.ModelConfiguration
@@ -399,8 +399,8 @@ async with pool.acquire_context(config) as handle:
 ### Secure Document Ingestion with RAG
 
 ```python
-from llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore
-from settings.app_settings import appConfiguration
+from practorflow.llm.knowledge.chroma_knowledge_store import ChromaKnowledgeStore
+from practorflow.settings.app_settings import appConfiguration
 
 # Initialize knowledge store (all data stays local)
 kb_config = appConfiguration.KnowledgeChromaConfiguration
@@ -427,7 +427,7 @@ async with pool.acquire_context(config) as handle:
 ```python
 from dataclasses import dataclass
 from pydantic_ai import Agent, RunContext
-from llm.pyai import LocalLLMModel, KnowledgeDeps, search_knowledge
+from practorflow.llm.pyai import LocalLLMModel, KnowledgeDeps, search_knowledge
 
 @dataclass
 class Deps:
@@ -458,7 +458,7 @@ async with pool.acquire_context(config) as handle:
 ### Web Search Integration (Optional)
 
 ```python
-from llm.tools import DuckDuckGoSearchTool
+from practorflow.llm.tools import DuckDuckGoSearchTool
 
 @dataclass
 class WebSearchDeps:
@@ -550,7 +550,7 @@ This approach balances embedding quality with context richness while maintaining
 
 ```python
 # Use transformers backend with quantization
-from llm import LLMConfig
+from practorflow.llm import LLMConfig
 
 config = LLMConfig(
     model_name="Qwen/Qwen2.5-7B-Instruct",
@@ -564,7 +564,7 @@ config = LLMConfig(
 ### Model Pool for Production Deployments
 
 ```python
-from llm import ModelPool
+from practorflow.llm import ModelPool
 
 # Initialize pool with multiple models for concurrent requests
 pool = ModelPool(max_models=3)
