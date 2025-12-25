@@ -4,9 +4,6 @@ import os
 import sys
 from typing import Optional
 
-# Ensure logs directory always exists (only used if file logging is enabled)
-os.makedirs("logs", exist_ok=True)
-
 # Cache for reusable loggers
 _logger_cache = {}
 
@@ -63,6 +60,10 @@ def get_logger(
     Returns:
         logging.Logger: Configured and reusable logger instance.
     """
+    if not stdout:
+    # Ensure logs directory always exists (only used if file logging is enabled)
+        os.makedirs("logs", exist_ok=True)
+
     if logger_name in _logger_cache:
         return _logger_cache[logger_name]
 

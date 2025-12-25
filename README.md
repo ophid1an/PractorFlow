@@ -39,18 +39,43 @@ PractorFlow is a production-ready, self-hosted AI service designed for real busi
 
 ## 🚀 Installation
 
-### Requirements
+### Option 1: Install as Package (Recommended)
 
-- Python 3.10+
-- CUDA-capable GPU (optional, for GPU acceleration)
-
-### Basic Installation
+Install PractorFlow as an editable package using `pyproject.toml`:
 
 ```bash
+# Clone the repository
+git clone https://github.com/vbouzoukos/PractorFlow.git
+cd PractorFlow
+
+# Install as editable package
+cd src/practorflow
+pip install -e .
+```
+
+This installs all dependencies defined in `pyproject.toml` and makes the `practorflow` package available system-wide.
+
+### Option 2: Install from Requirements
+
+```bash
+# Clone the repository
+git clone https://github.com/vbouzoukos/PractorFlow.git
+cd PractorFlow
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-The requirements.txt includes llama-cpp-python with CUDA 12.1 support. If you need a different CUDA version or CPU-only installation, modify the llama-cpp-python line in requirements.txt accordingly.
+The requirements.txt includes llama-cpp-python with CUDA 12.1 support. If you need a different CUDA version or CPU-only installation, modify the llama-cpp-python line accordingly.
+
+### Development Installation
+
+For development with additional tools (pytest, black, mypy, etc.):
+
+```bash
+cd src/practorflow
+pip install -e ".[dev]"
+```
 
 ### Enabling Qwen3 and Mistral3 Support
 
@@ -143,7 +168,7 @@ print('Model loaded successfully!')
 
 **Error: "Model loading takes too long"**
 - First load is always slower due to model download
-- Subsequent loads use cached models from `../models` directory
+- Subsequent loads use cached models from `models` directory
 - Consider using `pool.preload()` at server startup
 
 **Error: "ImportError: cannot import name 'Llama'"**
@@ -220,147 +245,243 @@ pip install --force-reinstall -r requirements.txt
 
 ## ⚙️ Configuration
 
-PractorFlow uses environment variables for configuration, loaded from three separate files in the `config/options/` directory:
+PractorFlow uses environment variables for configuration, managed by `app_settings.py`. Configuration is loaded from three `.env` files in the `config/` directory.
+
+### Loading Configuration
+
+Configuration is automatically loaded when you import the module. You can also specify a custom config path:
+
+```python
+from practorflow.settings.app_settings import load_configuration, appConfiguration
+
+# Load from default path (config/)
+load_configuration()
+
+# Or load from custom path
+load_configuration(config_path="/path/to/your/config")
+
+# Access configuration
+config = appConfiguration.ModelConfiguration
+```
 
 ### Configuration Files
 
-#### 1. Logger Configuration (`config/options/logger.env`)
+#### 1. Logger Configuration (`config/logger.env`)
 
-Controls logging levels for different components:
+Controls logging verbosity for different components. Useful for debugging specific parts of the system or reducing log noise in production.
 
-```bash
-# Logging Levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-LOG_RUNNER_LEVEL=INFO           # Runner component logging
-LOG_DOC_LEVEL=INFO              # Document processing logging
-LOG_KNOWLEDGE_LEVEL=INFO        # Knowledge store logging
-LOG_MODEL_POOL_LEVEL=INFO       # Model pool logging
-LOG_TOOL_LEVEL=INFO             # Tool execution logging
-LOG_AGENT_LEVEL=INFO            # Agent/Pydantic AI logging
-```
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `LOG_RUNNER_LEVEL` | LLM runner inference logging (generation, streaming) | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
+| `LOG_DOC_LEVEL` | Document processing logging (parsing, chunking) | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
+| `LOG_KNOWLEDGE_LEVEL` | Knowledge store operations (indexing, search) | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
+| `LOG_MODEL_POOL_LEVEL` | Model pool lifecycle (loading, caching, eviction) | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
+| `LOG_TOOL_LEVEL` | Tool execution logging (search, web tools) | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
+| `LOG_AGENT_LEVEL` | Pydantic AI agent logging (tool calls, responses) | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` |
 
-#### 2. Model Configuration (`config/options/model.env`)
-
-Configures the LLM model and inference settings:
+**Example:**
 
 ```bash
-# Model Selection
-LLM_MODEL=bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf # Model name
-LLM_BACKEND=llama_cpp         # 'llama_cpp' or 'transformers'
-LLM_DEVICE=auto                  # 'auto', 'cuda', 'cpu', or specific device
-LLM_DTYPE=auto                   # 'auto', 'float32', 'float16', 'bfloat16', or None
-LLM_MAX_NEW_TOKENS=2048          # Maximum tokens to generate
-LLM_TEMPERATURE=0.7              # Sampling temperature (0.0-2.0)
-LLM_TOP_P=0.9                    # Nucleus sampling parameter
-LLM_MODELS_DIR=../models          # Directory for cached models
+# Production: minimal logging
+LOG_RUNNER_LEVEL=WARNING
+LOG_DOC_LEVEL=INFO
+LOG_KNOWLEDGE_LEVEL=INFO
+LOG_MODEL_POOL_LEVEL=INFO
+LOG_TOOL_LEVEL=WARNING
+LOG_AGENT_LEVEL=INFO
 
-# Llama.cpp Specific Settings (when LLM_BACKEND=llama_cpp)
-LLM_GPU_LAYERS=-1                # Number of layers on GPU (-1 = all)
-LLM_N_CTX=32768                  # Context window size
-LLM_N_BATCH=2048                 # Batch size for prompt processing
-
-# Transformers Specific Settings (when LLM_BACKEND=transformers)
-# LLM_QUANTIZATION=4bit            # Optional: '4bit' or '8bit' quantization
-
-# Generation Settings
-# LLM_STOP_TOKENS=</s>,<|endoftext|>  # Comma-separated stop tokens
-LLM_MAX_SEARCH_RESULTS=5         # Default results for knowledge search
-
-# =============================================================================
-# Transformers Backend Optimizations
-# =============================================================================
-# These settings only apply when LLM_BACKEND=transformers
-# They are ignored for llama_cpp backend (GGUF models)
-
-# Enable torch.compile() for faster inference (PyTorch 2.0+)
-# Compiles the model into optimized kernels for your GPU
-# First inference triggers JIT compilation, subsequent calls are faster
-# Set to "false" to disable (useful for debugging or unsupported models)
-# Default: true
-# LLM_USE_TORCH_COMPILE=true
-
-# torch.compile() optimization mode
-# - "default"         : Fast compile (~10s), decent runtime speed
-# - "reduce-overhead" : Balanced compile (~30s), good runtime speed (recommended)
-# - "max-autotune"    : Slow compile (~3-5min), fastest runtime speed
-# Default: reduce-overhead
-# LLM_COMPILE_MODE=reduce-overhead
-
-# Run warmup inference immediately after model loading
-# Triggers JIT compilation during startup instead of on first request
-# Improves first request latency at the cost of longer startup time
-# Set to "false" if you prefer faster startup over first-request latency
-# Default: true
-# LLM_WARMUP_ON_LOAD=true
+# Development: verbose logging for debugging
+LOG_RUNNER_LEVEL=DEBUG
+LOG_DOC_LEVEL=DEBUG
+LOG_KNOWLEDGE_LEVEL=DEBUG
+LOG_MODEL_POOL_LEVEL=DEBUG
+LOG_TOOL_LEVEL=DEBUG
+LOG_AGENT_LEVEL=DEBUG
 ```
 
-#### 3. Knowledge Database Configuration (`config/options/knowledge.env`)
+---
 
-Configures the ChromaDB-based knowledge store:
+#### 2. Model Configuration (`config/model.env`)
+
+Configures the LLM model, backend, and inference parameters.
+
+##### Model Selection
+
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `LLM_MODEL` | Model identifier. For GGUF: `repo_id/filename.gguf`. For transformers: HuggingFace model name | Any valid model path or HF model ID | `Qwen/Qwen2-1.5B-Instruct-GGUF/qwen2-1_5b-instruct-q4_k_m.gguf` |
+| `LLM_BACKEND` | Inference backend to use | `llama_cpp` (for GGUF models), `transformers` (for HF models) | `llama_cpp` |
+| `LLM_DEVICE` | Device for model execution | `auto` (auto-detect), `cuda`, `cpu`, `cuda:0`, `cuda:1`, etc. | `auto` |
+| `LLM_DTYPE` | Data type for model weights (transformers only) | `auto`, `float32`, `float16`, `bfloat16` | `auto` |
+| `LLM_MODELS_DIR` | Directory where models are downloaded and cached | Any valid path | `../models` |
+
+##### Generation Parameters
+
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `LLM_MAX_NEW_TOKENS` | Maximum number of tokens to generate per response | `1` - `32768` (depends on model) | `2048` |
+| `LLM_TEMPERATURE` | Controls randomness. Lower = more deterministic, higher = more creative | `0.0` - `2.0` | `0.7` |
+| `LLM_TOP_P` | Nucleus sampling: only consider tokens with cumulative probability ≤ top_p | `0.0` - `1.0` | `0.9` |
+| `LLM_STOP_TOKENS` | Comma-separated list of tokens that stop generation | e.g., `</s>,<\|endoftext\|>` | None |
+| `LLM_MAX_SEARCH_RESULTS` | Default number of results for knowledge search tool | `1` - `20` | `5` |
+
+##### Llama.cpp Backend Settings
+
+These settings only apply when `LLM_BACKEND=llama_cpp`:
+
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `LLM_GPU_LAYERS` | Number of model layers to offload to GPU. `-1` = all layers (maximum GPU usage) | `-1` to number of model layers | `-1` |
+| `LLM_N_CTX` | Context window size in tokens. Larger = more memory, can handle longer conversations | `512` - `131072` (model dependent) | `32768` |
+| `LLM_N_BATCH` | Batch size for prompt processing. Larger = faster prompt processing, more VRAM | `1` - `n_ctx` | `2048` |
+
+##### Transformers Backend Settings
+
+These settings only apply when `LLM_BACKEND=transformers`:
+
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `LLM_QUANTIZATION` | Enable quantization to reduce memory usage | `4bit`, `8bit`, or unset for none | None |
+| `LLM_USE_TORCH_COMPILE` | Enable torch.compile() for faster inference (PyTorch 2.0+) | `true`, `false` | `true` |
+| `LLM_COMPILE_MODE` | Optimization mode for torch.compile() | `default` (fast compile), `reduce-overhead` (balanced), `max-autotune` (slowest compile, fastest runtime) | `reduce-overhead` |
+| `LLM_WARMUP_ON_LOAD` | Run warmup inference after loading to trigger JIT compilation | `true`, `false` | `true` |
+
+**Example - GGUF model with llama.cpp:**
 
 ```bash
-# Knowledge Database Type
-KB_TYPE=chromadb                           # Knowledge store type
-
-# ChromaDB Settings
-KB_CHROMA_PERSIST_DIRECTORY=../chroma_db   # Persistent storage location
-KB_CHROMA_RETRIEVE_COLLECTION=knowledge_retrieval  # Retrieval chunks collection
-KB_CHROMA_CONTEXT_COLLECTION=knowledge_context     # Context chunks collection
-KB_CHROMA_DOCUMENT_COLLECTION=knowledge_documents  # Documents collection
-KB_CHROMA_BATCH_SIZE=100                   # Batch size for operations
-
-# Embedding Model
-KB_CHROMA_EMBEDDING_MODEL=all-MiniLM-L6-v2  # SentenceTransformer model
-KB_CHROMA_EMBEDDING_MODEL_DIR=../models      # Embedding model cache directory
-
-# Small-to-Big Chunking Strategy
-KB_CHROMA_RETRIEVAL_CHUNK_SIZE=128        # Small chunk size for retrieval
-KB_CHROMA_RETRIEVAL_CHUNK_OVERLAP=20      # Overlap for retrieval chunks
-KB_CHROMA_CONTEXT_CHUNK_SIZE=1024         # Large chunk size for context
-KB_CHROMA_CONTEXT_CHUNK_OVERLAP=100       # Overlap for context chunks
+LLM_MODEL=bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+LLM_BACKEND=llama_cpp
+LLM_DEVICE=auto
+LLM_MODELS_DIR=../models
+LLM_MAX_NEW_TOKENS=2048
+LLM_TEMPERATURE=0.7
+LLM_TOP_P=0.9
+LLM_GPU_LAYERS=-1
+LLM_N_CTX=32768
+LLM_N_BATCH=2048
+LLM_MAX_SEARCH_RESULTS=5
 ```
+
+**Example - HuggingFace model with transformers:**
+
+```bash
+LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+LLM_BACKEND=transformers
+LLM_DEVICE=auto
+LLM_DTYPE=auto
+LLM_MODELS_DIR=../models
+LLM_MAX_NEW_TOKENS=2048
+LLM_TEMPERATURE=0.7
+LLM_TOP_P=0.9
+LLM_QUANTIZATION=4bit
+LLM_USE_TORCH_COMPILE=true
+LLM_COMPILE_MODE=reduce-overhead
+LLM_WARMUP_ON_LOAD=true
+```
+
+---
+
+#### 3. Knowledge Database Configuration (`config/knowledge.env`)
+
+Configures the ChromaDB-based knowledge store for RAG (Retrieval-Augmented Generation).
+
+##### Storage Settings
+
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `KB_TYPE` | Knowledge store backend type | `chromadb` | `chromadb` |
+| `KB_CHROMA_PERSIST_DIRECTORY` | Directory where ChromaDB stores its data persistently | Any valid path | `../chroma_db` |
+| `KB_CHROMA_BATCH_SIZE` | Number of chunks to process in a single batch operation | `1` - `1000` | `100` |
+
+##### Collection Names
+
+ChromaDB uses separate collections for different purposes:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `KB_CHROMA_RETRIEVE_COLLECTION` | Collection for small retrieval chunks (used for similarity search) | `knowledge_retrieval` |
+| `KB_CHROMA_CONTEXT_COLLECTION` | Collection for large context chunks (returned to LLM) | `knowledge_context` |
+| `KB_CHROMA_DOCUMENT_COLLECTION` | Collection for document metadata and full content | `knowledge_documents` |
+
+##### Embedding Model
+
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `KB_CHROMA_EMBEDDING_MODEL` | SentenceTransformer model for generating embeddings | Any model from [sentence-transformers](https://www.sbert.net/docs/pretrained_models.html) | `all-MiniLM-L6-v2` |
+| `KB_CHROMA_EMBEDDING_MODEL_DIR` | Directory to cache embedding model files | Any valid path | `../models` |
+
+**Popular embedding models:**
+- `all-MiniLM-L6-v2` - Fast, 384 dimensions, good quality (recommended)
+- `all-mpnet-base-v2` - Slower, 768 dimensions, better quality
+- `bge-small-en-v1.5` - Fast, 384 dimensions, excellent quality
+
+##### Small-to-Big Chunking Strategy
+
+PractorFlow uses a two-tier chunking approach for optimal RAG performance:
+
+| Variable | Description | Valid Values | Default |
+|----------|-------------|--------------|---------|
+| `KB_CHROMA_RETRIEVAL_CHUNK_SIZE` | Size of small chunks (in characters) used for embedding similarity search. Smaller = more precise matching | `50` - `500` | `128` |
+| `KB_CHROMA_RETRIEVAL_CHUNK_OVERLAP` | Overlap between retrieval chunks to avoid cutting sentences | `0` - `chunk_size/2` | `20` |
+| `KB_CHROMA_CONTEXT_CHUNK_SIZE` | Size of large parent chunks (in characters) returned to the LLM. Larger = more context | `256` - `4096` | `1024` |
+| `KB_CHROMA_CONTEXT_CHUNK_OVERLAP` | Overlap between context chunks | `0` - `chunk_size/2` | `100` |
+
+**How Small-to-Big works:**
+1. Documents are split into large "context chunks" (1024 chars by default)
+2. Each context chunk is further split into small "retrieval chunks" (128 chars)
+3. Retrieval chunks are embedded and searched for similarity
+4. When a match is found, the parent context chunk is returned to the LLM
+5. This provides precise search with rich context
+
+**Example:**
+
+```bash
+# Knowledge store type
+KB_TYPE=chromadb
+
+# Storage location (relative to src/ directory)
+KB_CHROMA_PERSIST_DIRECTORY=../chroma_db
+
+# Collection names
+KB_CHROMA_RETRIEVE_COLLECTION=knowledge_retrieval
+KB_CHROMA_CONTEXT_COLLECTION=knowledge_context
+KB_CHROMA_DOCUMENT_COLLECTION=knowledge_documents
+
+# Performance
+KB_CHROMA_BATCH_SIZE=100
+
+# Embedding model
+KB_CHROMA_EMBEDDING_MODEL=all-MiniLM-L6-v2
+KB_CHROMA_EMBEDDING_MODEL_DIR=../models
+
+# Chunking strategy
+KB_CHROMA_RETRIEVAL_CHUNK_SIZE=128
+KB_CHROMA_RETRIEVAL_CHUNK_OVERLAP=20
+KB_CHROMA_CONTEXT_CHUNK_SIZE=1024
+KB_CHROMA_CONTEXT_CHUNK_OVERLAP=100
+```
+
+---
 
 ### Sample Model Configurations
 
-Sample configurations for various models are provided in `config/options/samples/models/`. You can use these as templates or copy them directly to `config/options/model.env`:
+Sample configurations for various models are provided in `config/samples/models/`. Copy these to your `config/` directory as `model.env`:
 
-**Available Sample Configurations:**
-
-1. **Qwen2-1.5B-Instruct-GGUF** (`model-Qwen2-1.5B-Instruct-GGUF.env`)
-   - Small, fast model for testing
-   - Backend: llama_cpp
-   - Quantization: Q4_K_M
-
-2. **Qwen2.5-7B** (`model-Qwen2.5-7B.env`)
-   - Balanced quality/performance
-   - Backend: transformers
-   - Quantization: 4bit
-
-3. **Qwen3-VL-8B-Instruct-GGUF** (`model-Qwen3-VL-8B-Instruct-GGUF.env`)
-   - Multimodal (text + vision)
-   - Backend: llama_cpp
-   - Requires custom llama-cpp-python build (see Installation section)
-
-4. **Ministral-3-8B-Instruct-2512-GGUF** (`model-Ministral-3-8B-Instruct-2512-GGUF.env`)
-   - Mistral's latest architecture
-   - Backend: llama_cpp
-   - Requires custom llama-cpp-python build (see Installation section)
-
-5. **GPT-OSS-20B** (`model-gpt-oss-20b.env`)
-   - Large open-source model
-   - Backend: transformers
-   - Quantization: 4bit
-   - Requires significant resources
+| File | Model | Backend | Notes |
+|------|-------|---------|-------|
+| `model-Qwen2-1.5B-Instruct-GGUF.env` | Qwen2-1.5B | llama_cpp | Small, fast, for testing |
+| `model-Qwen2.5-7B.env` | Qwen2.5-7B | transformers | Balanced quality/performance |
+| `model-Qwen2.5-7B-Instruct-GGUF.env` | Qwen2.5-7B | llama_cpp | GGUF version |
+| `model-Qwen3-VL-8B-Instruct-GGUF.env` | Qwen3-VL-8B | llama_cpp | Multimodal (requires custom build) |
+| `model-Ministral-3-8B-Instruct-2512-GGUF.env` | Ministral-3-8B | llama_cpp | Latest Mistral (requires custom build) |
+| `model-gpt-oss-20b.env` | GPT-OSS-20B | transformers | Large model, requires significant resources |
 
 **Using Sample Configurations:**
 
-To use a sample configuration, copy it to your active model configuration file:
-
 ```bash
-# Example: Use Qwen2.5-7B configuration
-cp config/options/samples/models/model-Qwen2.5-7B.env config/options/model.env
+# Copy a sample configuration to use
+cp config/samples/models/model-Qwen2.5-7B-Instruct-GGUF.env config/model.env
 ```
-
-Or manually copy the contents into `config/options/model.env` and modify as needed.
 
 ## 🎯 Quick Start
 
@@ -481,12 +602,16 @@ result = await agent.run(
 
 ## 📚 Examples
 
-Comprehensive examples are provided in:
-- `sample.py` - Basic usage, streaming, RAG workflows
-- `pyai-examples.py` - Pydantic AI integration patterns
+Comprehensive examples are provided in the `src/` directory:
+
+- `src/sample.py` - Basic usage, streaming, RAG workflows
+- `src/pyai-examples.py` - Pydantic AI integration patterns
 
 Run examples:
+
 ```bash
+cd src
+
 # Basic examples
 python sample.py
 
@@ -499,38 +624,63 @@ python pyai-examples.py
 
 ## 🗃️ Architecture
 
-### Core Components
+### Project Structure
 
 ```
-llm/
-├── base/               # Abstract base classes
-│   ├── llm_runner.py   # Base runner interface
-│   └── session.py      # Session management
-├── pool/               # Model pooling
-│   ├── model_pool.py   # Async model pool with LRU
-│   └── model_handle.py # Model wrapper
-├── knowledge/          # RAG components
-│   ├── knowledge_store.py        # Abstract store interface
-│   ├── chroma_knowledge_store.py # ChromaDB implementation
-│   └── chroma_knowledge_config.py
-├── document/           # Document processing
-│   ├── document_loader.py # File parsing & chunking
-│   └── embeddings.py      # Embedding models
-├── tools/              # Tool system
-│   ├── base.py               # Tool interface
-│   ├── tool_registry.py      # Tool management
-│   ├── knowledge_search.py   # RAG search tool
-│   ├── base_web_search.py    # DuckDuckGo tool
-│   └── serpapi_web_search.py # SerpAPI tool
-├── pyai/               # Pydantic AI integration
-│   ├── model.py              # LocalLLMModel implementation
-│   ├── stream_response.py    # Streaming support
-│   ├── message_converter.py  # Message format conversion
-│   └── tools.py              # Pydantic AI tool helpers
-├── llama_cpp_runner.py    # Llama.cpp backend
-├── transformers_runner.py # Transformers backend
-├── factory.py             # Runner factory
-└── llm_config.py          # Configuration dataclass
+PractorFlow/
+├── config/
+│   ├── knowledge.env              # Knowledge store configuration
+│   ├── logger.env                 # Logging configuration
+│   ├── model.env                  # Model configuration
+│   └── samples/
+│       └── models/                # Sample model configurations
+├── src/
+│   ├── sample.py                  # Basic usage examples
+│   ├── pyai-examples.py           # Pydantic AI examples
+│   └── practorflow/
+│       ├── __init__.py            # Package exports
+│       ├── pyproject.toml         # Package definition
+│       ├── converters/            # Type converters
+│       │   └── torch_dtype_convertor.py
+│       ├── llm/                   # Core LLM module
+│       │   ├── base/              # Abstract base classes
+│       │   │   ├── llm_runner.py  # Base runner interface
+│       │   │   ├── session.py     # Session management
+│       │   │   └── session_store.py
+│       │   ├── pool/              # Model pooling
+│       │   │   ├── model_pool.py  # Async pool with LRU
+│       │   │   └── model_handle.py
+│       │   ├── knowledge/         # RAG components
+│       │   │   ├── knowledge_store.py
+│       │   │   ├── chroma_knowledge_store.py
+│       │   │   └── chroma_knowledge_config.py
+│       │   ├── document/          # Document processing
+│       │   │   ├── document_loader.py
+│       │   │   └── embeddings.py
+│       │   ├── tools/             # Tool system
+│       │   │   ├── base.py
+│       │   │   ├── tool_registry.py
+│       │   │   ├── knowledge_search.py
+│       │   │   ├── base_web_search.py
+│       │   │   └── serpapi_web_search.py
+│       │   ├── pyai/              # Pydantic AI integration
+│       │   │   ├── model.py
+│       │   │   ├── stream_response.py
+│       │   │   ├── message_converter.py
+│       │   │   └── tools.py
+│       │   ├── session/           # Session stores
+│       │   │   └── memory_session_store.py
+│       │   ├── llama_cpp_runner.py
+│       │   ├── transformers_runner.py
+│       │   ├── factory.py
+│       │   └── llm_config.py
+│       ├── logger/                # Logging utilities
+│       │   └── logger.py
+│       └── settings/              # Configuration management
+│           └── app_settings.py
+├── requirements.txt
+├── LICENSE.txt
+└── CONTRIBUTING.md
 ```
 
 ### Small-to-Big Chunking Strategy
@@ -635,9 +785,23 @@ if 'tool_calls' in result:
         print(f"Tool: {tc['tool_name']}, Args: {tc['args']}")
 ```
 
+### Custom Configuration Path
+
+```python
+from practorflow.settings.app_settings import load_configuration
+
+# Load configuration from a custom directory
+load_configuration(config_path="/etc/practorflow/config")
+
+# Or for Docker/container deployments
+load_configuration(config_path="/app/config")
+```
+
 ## 🧪 Testing
 
 ```bash
+cd src
+
 # Run basic examples
 python sample.py
 
@@ -680,7 +844,7 @@ For major changes, please open an issue first to discuss what you would like to 
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE.txt](LICENSE.txt) file for details.
 
 Apache 2.0 allows you to:
 - ✅ Use commercially
@@ -705,7 +869,7 @@ Built on modern open-source models including Qwen, Mistral, and others.
 
 ## 📧 Support
 
-For questions, issues, or feature requests, please [open an issue](https://github.com/yourusername/practorflow/issues) on GitHub.
+For questions, issues, or feature requests, please [open an issue](https://github.com/vbouzoukos/PractorFlow/issues) on GitHub.
 
 ---
 

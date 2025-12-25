@@ -549,12 +549,12 @@ async def run_all_examples():
     examples = [
         ("Basic Usage", example_basic_usage),
         ("RAG with Tool", example_rag_with_tool),
-        # ("Scoped Search", example_scoped_search),
-        # ("Streaming", example_streaming),
-        # ("Conversation", example_conversation),
-        # ("Multiple Tools", example_multiple_tools),
-        # ("Web Search DuckDuckGo", example_web_search_duckduckgo),
-        # ("Web Search SerpAPI", example_web_search_serpapi),
+        ("Scoped Search", example_scoped_search),
+        ("Streaming", example_streaming),
+        ("Conversation", example_conversation),
+        ("Multiple Tools", example_multiple_tools),
+        ("Web Search DuckDuckGo", example_web_search_duckduckgo),
+        ("Web Search SerpAPI", example_web_search_serpapi),
     ]
 
     for name, example_fn in examples:
