@@ -7,12 +7,11 @@ name = "PractorFlow"
 version = "0.0.1"
 description = "PractorFlow - Private AI Service for local LLM inference with RAG support"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -61,7 +60,7 @@ Repository = "https://github.com/vbouzoukos/PractorFlow"
 Issues = "https://github.com/vbouzoukos/PractorFlow/issues"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 
 [tool.setuptools.package-data]
 practorflow = ["py.typed"]
