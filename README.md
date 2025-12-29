@@ -50,6 +50,7 @@ cd PractorFlow
 
 # Install as editable package
 cd src/practorflow
+/** maybe needed **/ python.exe -m pip install --upgrade pip
 pip install -e .
 ```
 
