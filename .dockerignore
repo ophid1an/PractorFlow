@@ -1,0 +1,14 @@
+.git
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.env
+.venv
+venv/
+dist/
+build/
+models/
+chroma_db/

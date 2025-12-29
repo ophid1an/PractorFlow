@@ -78,6 +78,31 @@ cd src/practorflow
 pip install -e ".[dev]"
 ```
 
+## Docker
+
+Build and run with Docker:
+
+```bash
+docker build -t practorflow .
+docker run --rm -it \
+  -v "${PWD}/config/options:/app/config/options" \
+  -v "${PWD}/models:/app/models" \
+  -v "${PWD}/chroma_db:/app/chroma_db" \
+  practorflow
+```
+
+Using Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+The container runs `python sample.py` by default. Override with a document:
+
+```bash
+docker run --rm -it practorflow python sample.py /app/path/to/document.pdf
+```
+
 ### Enabling Qwen3 and Mistral3 Support
 
 PractorFlow supports the latest Qwen3VL and Mistral3 models, which require a specialized build of llama-cpp-python.

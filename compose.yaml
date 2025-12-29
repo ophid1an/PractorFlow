@@ -1,0 +1,9 @@
+services:
+  practorflow:
+    build: .
+    working_dir: /app/src
+    command: ["python", "sample.py"]
+    volumes:
+      - ./config/options:/app/config/options
+      - ./models:/app/models
+      - ./chroma_db:/app/chroma_db
